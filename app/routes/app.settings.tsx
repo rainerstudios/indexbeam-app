@@ -69,7 +69,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       hasGoogleOAuth: !!store.googleRefreshToken,
       googleEmail: store.googleEmail || "",
       googleScopes: store.googleScopes || "",
-      ga4PropertyId: store.ga4PropertyId || "",
     },
     competitors,
     currentPlan: store.plan || "free",
