@@ -1,16 +1,10 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
 
-// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
-// enough when changing adapters.
-// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Session {
@@ -31,4 +25,160 @@ model Session {
   emailVerified Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
+}
+
+model Store {
+  id                   String    @id @default(cuid())
+  shopDomain           String    @unique
+  accessToken          String
+  plan                 String    @default("free")
+  indexnowKey          String?
+  bingWebmasterApiKey  String?
+  gscCredentials       String?
+  bingSearchApiKey     String?
+  firecrawlApiKey      String?
+  yandexWebmasterToken String?
+  ga4MeasurementId     String?
+  ga4ApiSecret         String?
+  ga4PropertyId        String?
+  ga4Credentials       String?
+  llmsTxtContent       String?
+  llmsTxtAutoGenerate  Boolean   @default(true)
+  googleAccessToken    String?
+  googleRefreshToken   String?
+  googleTokenExpiresAt DateTime?
+  googleScopes         String?
+  googleEmail          String?
+  installedAt          DateTime  @default(now())
+  uninstalledAt        DateTime?
+
+  urlSubmissions    UrlSubmission[]
+  urlIndexStatuses  UrlIndexStatus[]
+  visibilityQueries VisibilityQuery[]
+  competitors       Competitor[]
+  schemaAudits      SchemaAudit[]
+  billingEvents     BillingEvent[]
+  activityLogs      ActivityLog[]
+}
+
+model UrlSubmission {
+  id           String   @id @default(cuid())
+  storeId      String
+  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  url          String
+  status       String   @default("pending")
+  responseCode Int?
+  source       String
+  engine       String   @default("bing")
+  errorMessage String?
+  submittedAt  DateTime @default(now())
+
+  @@index([storeId, submittedAt])
+  @@index([storeId, status])
+}
+
+model UrlIndexStatus {
+  id              String    @id @default(cuid())
+  storeId         String
+  store           Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  url             String
+  bingIndexed     Boolean?
+  bingLastCrawl   DateTime?
+  googleIndexed   Boolean?
+  googleLastCrawl DateTime?
+  lastCheckedAt   DateTime?
+  crawlErrors     String?
+
+  @@unique([storeId, url])
+  @@index([storeId])
+}
+
+model VisibilityQuery {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  keyword   String
+  frequency String   @default("daily")
+  createdAt DateTime @default(now())
+
+  results VisibilityResult[]
+
+  @@index([storeId])
+}
+
+model VisibilityResult {
+  id                 String   @id @default(cuid())
+  queryId            String
+  query              VisibilityQuery @relation(fields: [queryId], references: [id], onDelete: Cascade)
+  rankPosition       Int?
+  domain             String?
+  mentionsBrand      Boolean  @default(false)
+  mentionsCompetitor Boolean  @default(false)
+  snippet            String?
+  source             String   @default("bing")
+  checkedAt          DateTime @default(now())
+
+  @@index([queryId, checkedAt])
+}
+
+model Competitor {
+  id      String  @id @default(cuid())
+  storeId String
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  domain  String
+  name    String?
+
+  changes CompetitorChange[]
+
+  @@unique([storeId, domain])
+}
+
+model CompetitorChange {
+  id            String     @id @default(cuid())
+  competitorId  String
+  competitor    Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  changeType    String
+  changeSummary String
+  detectedAt    DateTime   @default(now())
+}
+
+model SchemaAudit {
+  id                    String   @id @default(cuid())
+  storeId               String
+  store                 Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  url                   String
+  hasProductSchema      Boolean  @default(false)
+  hasReviewSchema       Boolean  @default(false)
+  hasFaqSchema          Boolean  @default(false)
+  hasOrganizationSchema Boolean  @default(false)
+  hasBreadcrumbSchema   Boolean  @default(false)
+  hasOfferSchema        Boolean  @default(false)
+  missingFields         String?
+  score                 Int      @default(0)
+  scannedAt             DateTime @default(now())
+
+  @@index([storeId])
+}
+
+model BillingEvent {
+  id              String   @id @default(cuid())
+  storeId         String
+  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  plan            String
+  type            String
+  details         String?
+  shopifyChargeId String?
+  createdAt       DateTime @default(now())
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  type      String
+  message   String
+  metadata  String?
+  createdAt DateTime @default(now())
+
+  @@index([storeId, createdAt])
 }

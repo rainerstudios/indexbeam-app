@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "mcp__shopify-dev-mcp__learn_shopify_api",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch",
+      "WebFetch(domain:shopify.dev)",
+      "WebFetch(domain:api.github.com)",
+      "mcp__shopify-dev-mcp__search_docs_chunks",
+      "mcp__shopify-dev-mcp__introspect_graphql_schema",
+      "Bash(cd \"D:/AppADay/businessIdea/instant-indexing\" && shopify app init --template=https://github.com/Shopify/shopify-app-template-react-router --name=\"ai-index-visibility-os\" --path=\".\" 2>&1)",
+      "Bash(cd \"D:/AppADay/businessIdea/instant-indexing\" && git clone https://github.com/Shopify/shopify-app-template-react-router.git . 2>&1)",
+      "Bash(tail:*)",
+      "Bash(node:*)",
+      "Bash(rm -rf \"D:/AppADay/businessIdea/instant-indexing/prisma/migrations\" && cd \"D:/AppADay/businessIdea/instant-indexing\" && npx prisma migrate dev --name init 2>&1)",
+      "Bash(head:*)",
+      "Bash(fly machines destroy 3287d970b630e8 --app indexbeam-ai --force 2>&1 && fly machines destroy 68349d2cd65268 --app indexbeam-ai --force 2>&1)",
+      "Bash(grep 28790ec0e0d5d8:*)",
+      "Bash(cd /d/AppADay/businessIdea/instant-indexing && fly deploy 2>&1)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:developers.google.com)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "shopify-dev-mcp"
+  ]
+}

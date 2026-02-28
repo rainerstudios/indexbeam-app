@@ -13,5 +13,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     await db.session.deleteMany({ where: { shop } });
   }
 
+  // Mark store as uninstalled
+  await db.store
+    .update({
+      where: { shopDomain: shop },
+      data: { uninstalledAt: new Date() },
+    })
+    .catch(() => {
+      // Store may not exist yet if auth never completed
+    });
+
   return new Response();
 };

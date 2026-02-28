@@ -1,250 +1,603 @@
-import { useEffect } from "react";
-import type {
-  ActionFunctionArgs,
-  HeadersFunction,
-  LoaderFunctionArgs,
-} from "react-router";
-import { useFetcher } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
+import { useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
+import prisma from "../db.server";
+import { ClientOnly } from "../components/ClientOnly";
+import { PolarisProvider } from "../components/PolarisProvider";
+import { StatBox } from "../components/StatBox";
+import { Timeline, type TimelineItem } from "../components/Timeline";
+import { SetupGuide, type SetupGuideItem } from "../components/SetupGuide";
+import {
+  Badge,
+  Text,
+  Card,
+  BlockStack,
+  InlineGrid,
+  InlineStack,
+  Box,
+  Button,
+  ButtonGroup,
+  Icon,
+  ProgressBar,
+  Banner,
+  Divider,
+  EmptyState,
+} from "@shopify/polaris";
+import {
+  SearchIcon,
+  ViewIcon,
+  SettingsIcon,
+  CheckCircleIcon,
+  AlertCircleIcon,
+} from "@shopify/polaris-icons";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
 
-  return null;
-};
+  const store = await prisma.store.findUnique({
+    where: { shopDomain: session.shop },
+  });
 
-export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
-  const color = ["Red", "Orange", "Yellow", "Green"][
-    Math.floor(Math.random() * 4)
-  ];
-  const response = await admin.graphql(
-    `#graphql
-      mutation populateProduct($product: ProductCreateInput!) {
-        productCreate(product: $product) {
-          product {
-            id
-            title
-            handle
-            status
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  price
-                  barcode
-                  createdAt
-                }
-              }
-            }
-          }
-        }
-      }`,
-    {
-      variables: {
-        product: {
-          title: `${color} Snowboard`,
-        },
+  if (!store) {
+    return {
+      stats: {
+        totalSubmissions: 0,
+        successRate: 0,
+        indexingHealth: 0,
+        trackedKeywords: 0,
+        indexedUrls: 0,
+        totalTrackedUrls: 0,
       },
-    },
-  );
-  const responseJson = await response.json();
+      traffic: { bingClicks: 0, yandexClicks: 0, ga4Organic: 0 },
+      aiTraffic: { totalAISessions: 0, totalAIUsers: 0, aiShareOfTotal: 0, sources: [] as { source: string; sessions: number }[] },
+      recentActivity: [],
+      setupSteps: {
+        installed: true,
+        firstSubmit: false,
+        gscConnected: false,
+        keywordsAdded: false,
+      },
+      schemaAuditCount: 0,
+      dailySubmissions: [],
+      engines: { hasBing: false, hasYandex: false, hasGa4: false },
+    };
+  }
 
-  const product = responseJson.data!.productCreate!.product!;
-  const variantId = product.variants.edges[0]!.node!.id!;
+  const [
+    totalSubmissions,
+    successfulSubmissions,
+    indexedUrls,
+    totalTrackedUrls,
+    trackedKeywords,
+    schemaAuditCount,
+    recentActivity,
+    dailySubmissions,
+  ] = await Promise.all([
+    prisma.urlSubmission.count({ where: { storeId: store.id } }),
+    prisma.urlSubmission.count({
+      where: { storeId: store.id, status: "sent" },
+    }),
+    prisma.urlIndexStatus.count({
+      where: { storeId: store.id, bingIndexed: true },
+    }),
+    prisma.urlIndexStatus.count({ where: { storeId: store.id } }),
+    prisma.visibilityQuery.count({ where: { storeId: store.id } }),
+    prisma.schemaAudit.count({ where: { storeId: store.id } }),
+    prisma.activityLog.findMany({
+      where: { storeId: store.id },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    }),
+    prisma.$queryRaw<{ day: Date; count: bigint }[]>`
+      SELECT DATE("submittedAt") as day, COUNT(*)::int as count
+      FROM "UrlSubmission"
+      WHERE "storeId" = ${store.id}
+        AND "submittedAt" >= NOW() - INTERVAL '7 days'
+      GROUP BY DATE("submittedAt")
+      ORDER BY day ASC
+    `.catch(() => []),
+  ]);
 
-  const variantResponse = await admin.graphql(
-    `#graphql
-    mutation shopifyReactRouterTemplateUpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants {
-          id
-          price
-          barcode
-          createdAt
-        }
+  const successRate =
+    totalSubmissions > 0
+      ? Math.round((successfulSubmissions / totalSubmissions) * 100)
+      : 0;
+  const indexingHealth =
+    totalTrackedUrls > 0
+      ? Math.round((indexedUrls / totalTrackedUrls) * 100)
+      : 0;
+
+  const now = new Date();
+  const sparkline: number[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().split("T")[0];
+    const match = (dailySubmissions as any[]).find(
+      (r) => new Date(r.day).toISOString().split("T")[0] === dateStr
+    );
+    sparkline.push(match ? Number(match.count) : 0);
+  }
+
+  const hasBing = !!store.bingWebmasterApiKey;
+  const hasYandex = !!store.yandexWebmasterToken;
+  const hasGa4 = !!store.ga4PropertyId && (!!store.ga4Credentials || !!store.googleRefreshToken);
+
+  let bingClicks = 0;
+  let yandexClicks = 0;
+  let ga4Organic = 0;
+  let aiTraffic = { totalAISessions: 0, totalAIUsers: 0, aiShareOfTotal: 0, sources: [] as { source: string; sessions: number }[] };
+
+  const { decrypt } = await import("../lib/encryption.server");
+
+  if (hasBing) {
+    try {
+      const { getSearchTraffic } = await import(
+        "../services/bing-webmaster.server"
+      );
+      const traffic = await getSearchTraffic(
+        decrypt(store.bingWebmasterApiKey!),
+        `https://${store.shopDomain}`
+      );
+      bingClicks = traffic.reduce((s, t) => s + t.clicks, 0);
+    } catch {}
+  }
+
+  if (hasYandex) {
+    try {
+      const { getSearchTraffic: yt, getHosts } = await import(
+        "../services/yandex-webmaster.server"
+      );
+      const token = decrypt(store.yandexWebmasterToken!);
+      const hosts = await getHosts(token);
+      const host = hosts.find((h) =>
+        h.asciiHostUrl.includes(store.shopDomain)
+      );
+      if (host) {
+        const traffic = await yt(token, "me", host.hostId);
+        yandexClicks = traffic.reduce((s, t) => s + t.clicks, 0);
       }
-    }`,
-    {
-      variables: {
-        productId: product.id,
-        variants: [{ id: variantId, price: "100.00" }],
-      },
-    },
-  );
+    } catch {}
+  }
 
-  const variantResponseJson = await variantResponse.json();
+  if (hasGa4) {
+    try {
+      const { getOverallTrafficSummary, getAITrafficSummary } = await import(
+        "../services/ga4.server"
+      );
+      const { getGoogleAccessToken } = await import(
+        "../lib/google-oauth.server"
+      );
+      // Prefer OAuth token, fall back to service account credentials
+      const oauthToken = await getGoogleAccessToken(store.id);
+      const credentialsOrToken = oauthToken
+        ? oauthToken
+        : JSON.parse(decrypt(store.ga4Credentials!));
+
+      const [summary, aiSummary] = await Promise.all([
+        getOverallTrafficSummary(credentialsOrToken, store.ga4PropertyId!, 30),
+        getAITrafficSummary(credentialsOrToken, store.ga4PropertyId!, 30).catch(() => null),
+      ]);
+
+      ga4Organic = summary.organicSessions;
+
+      if (aiSummary) {
+        aiTraffic = {
+          totalAISessions: aiSummary.totalAISessions,
+          totalAIUsers: aiSummary.totalAIUsers,
+          aiShareOfTotal: aiSummary.aiShareOfTotal,
+          sources: aiSummary.sources.map((s) => ({
+            source: s.source,
+            sessions: s.sessions,
+          })),
+        };
+      }
+    } catch {}
+  }
 
   return {
-    product: responseJson!.data!.productCreate!.product,
-    variant:
-      variantResponseJson!.data!.productVariantsBulkUpdate!.productVariants,
+    stats: {
+      totalSubmissions,
+      successRate,
+      indexingHealth,
+      trackedKeywords,
+      indexedUrls,
+      totalTrackedUrls,
+    },
+    traffic: { bingClicks, yandexClicks, ga4Organic },
+    aiTraffic,
+    recentActivity: recentActivity.map((a) => ({
+      ...a,
+      createdAt: a.createdAt.toISOString(),
+    })),
+    setupSteps: {
+      installed: true,
+      firstSubmit: totalSubmissions > 0,
+      gscConnected: !!store.gscCredentials || !!store.googleRefreshToken,
+      keywordsAdded: trackedKeywords > 0,
+    },
+    schemaAuditCount,
+    dailySubmissions: sparkline,
+    engines: { hasBing, hasYandex, hasGa4 },
   };
 };
 
-export default function Index() {
-  const fetcher = useFetcher<typeof action>();
+export default function Dashboard() {
+  const { stats, traffic, aiTraffic, recentActivity, setupSteps, dailySubmissions, engines, schemaAuditCount } =
+    useLoaderData<typeof loader>();
+  const navigate = useNavigate();
 
-  const shopify = useAppBridge();
-  const isLoading =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
+  const totalTraffic = traffic.bingClicks + traffic.yandexClicks + traffic.ga4Organic;
 
-  useEffect(() => {
-    if (fetcher.data?.product?.id) {
-      shopify.toast.show("Product created");
-    }
-  }, [fetcher.data?.product?.id, shopify]);
+  const setupItems: SetupGuideItem[] = [
+    {
+      id: 0,
+      title: "Install IndexBeam AI",
+      description: "You've installed the app. Your products will be automatically submitted for indexing.",
+      complete: setupSteps.installed,
+    },
+    {
+      id: 1,
+      title: "Submit your first URL",
+      description: "Submit a product URL to Bing and Yandex for instant indexing.",
+      complete: setupSteps.firstSubmit,
+      primaryButton: {
+        content: "Go to Indexing",
+        props: { onClick: () => navigate("/app/indexing") },
+      },
+    },
+    {
+      id: 2,
+      title: "Connect Google",
+      description: "One click to unlock AI traffic monitoring, index status tracking, and search performance data.",
+      complete: setupSteps.gscConnected,
+      primaryButton: {
+        content: "Connect Google",
+        props: { onClick: () => navigate("/app/settings?tab=connections") },
+      },
+    },
+    {
+      id: 3,
+      title: "Run a schema audit",
+      description: "Check your product pages for structured data that helps AI search engines understand your products.",
+      complete: schemaAuditCount > 0,
+      primaryButton: {
+        content: "Audit Pages",
+        props: { onClick: () => navigate("/app/visibility?tab=schema") },
+      },
+    },
+    {
+      id: 4,
+      title: "Track AI visibility keywords",
+      description: "Monitor how your brand appears when people search in AI tools like ChatGPT and Perplexity.",
+      complete: setupSteps.keywordsAdded,
+      primaryButton: {
+        content: "Track Keywords",
+        props: { onClick: () => navigate("/app/visibility") },
+      },
+    },
+  ];
 
-  const generateProduct = () => fetcher.submit({}, { method: "POST" });
+  const allSetupComplete = setupItems.every((item) => item.complete);
+
+  const timelineItems: TimelineItem[] = recentActivity.map((activity: any) => {
+    const isFail =
+      activity.type.includes("fail") || activity.type.includes("error");
+    return {
+      tone: isFail ? ("critical" as const) : ("success" as const),
+      timelineEvent: (
+        <>
+          <Badge tone={isFail ? "critical" : "success"}>
+            {activity.type.replace(/_/g, " ")}
+          </Badge>{" "}
+          {activity.message}
+        </>
+      ),
+      timestamp: new Date(activity.createdAt),
+    };
+  });
+
+  const connectedEngines = [engines.hasBing, engines.hasYandex, engines.hasGa4].filter(Boolean).length;
 
   return (
-    <s-page heading="Shopify app template">
-      <s-button slot="primary-action" onClick={generateProduct}>
-        Generate a product
-      </s-button>
+    <s-page heading="IndexBeam AI">
+      <ClientOnly
+        fallback={
+          <s-card>
+            <s-box padding="base">
+              <s-text>Loading dashboard...</s-text>
+            </s-box>
+          </s-card>
+        }
+      >
+        {() => (
+          <PolarisProvider>
+            <BlockStack gap="500">
+              {/* Setup Guide - only show if not all complete */}
+              {!allSetupComplete && (
+                <SetupGuide
+                  onDismiss={() => {}}
+                  onStepComplete={async () => {}}
+                  items={setupItems}
+                />
+              )}
 
-      <s-section heading="Congrats on creating a new Shopify app 🎉">
-        <s-paragraph>
-          This embedded app template uses{" "}
-          <s-link
-            href="https://shopify.dev/docs/apps/tools/app-bridge"
-            target="_blank"
-          >
-            App Bridge
-          </s-link>{" "}
-          interface examples like an{" "}
-          <s-link href="/app/additional">additional page in the app nav</s-link>
-          , as well as an{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            Admin GraphQL
-          </s-link>{" "}
-          mutation demo, to provide a starting point for app development.
-        </s-paragraph>
-      </s-section>
-      <s-section heading="Get started with products">
-        <s-paragraph>
-          Generate a product with GraphQL and get the JSON output for that
-          product. Learn more about the{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql/latest/mutations/productCreate"
-            target="_blank"
-          >
-            productCreate
-          </s-link>{" "}
-          mutation in our API references.
-        </s-paragraph>
-        <s-stack direction="inline" gap="base">
-          <s-button
-            onClick={generateProduct}
-            {...(isLoading ? { loading: true } : {})}
-          >
-            Generate a product
-          </s-button>
-          {fetcher.data?.product && (
-            <s-button
-              onClick={() => {
-                shopify.intents.invoke?.("edit:shopify/Product", {
-                  value: fetcher.data?.product?.id,
-                });
-              }}
-              target="_blank"
-              variant="tertiary"
-            >
-              Edit product
-            </s-button>
-          )}
-        </s-stack>
-        {fetcher.data?.product && (
-          <s-section heading="productCreate mutation">
-            <s-stack direction="block" gap="base">
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre style={{ margin: 0 }}>
-                  <code>{JSON.stringify(fetcher.data.product, null, 2)}</code>
-                </pre>
-              </s-box>
+              {/* Connection status banner */}
+              {connectedEngines === 0 && allSetupComplete && (
+                <Banner
+                  title="Connect your search engines"
+                  tone="warning"
+                  action={{ content: "Go to Settings", onAction: () => navigate("/app/settings") }}
+                >
+                  <Text as="p" variant="bodyMd">
+                    Connect at least one search engine (Bing, Google, or Yandex) to start tracking your indexing status and traffic.
+                  </Text>
+                </Banner>
+              )}
 
-              <s-heading>productVariantsBulkUpdate mutation</s-heading>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre style={{ margin: 0 }}>
-                  <code>{JSON.stringify(fetcher.data.variant, null, 2)}</code>
-                </pre>
-              </s-box>
-            </s-stack>
-          </s-section>
+              {/* Stats Row */}
+              <InlineGrid columns={{ xs: 1, sm: 2, md: 4 }} gap="400">
+                <StatBox
+                  title="URLs Submitted"
+                  value={stats.totalSubmissions}
+                  data={dailySubmissions}
+                />
+                <StatBox
+                  title="Success Rate"
+                  value={`${stats.successRate}%`}
+                  data={[]}
+                />
+                <StatBox
+                  title="Indexing Health"
+                  value={`${stats.indexingHealth}%`}
+                  data={[]}
+                />
+                <StatBox
+                  title="Keywords Tracked"
+                  value={stats.trackedKeywords}
+                  data={[]}
+                />
+              </InlineGrid>
+
+              {/* Two column layout: Traffic + Quick Actions */}
+              <InlineGrid columns={{ xs: 1, md: "2fr 1fr" }} gap="400">
+                {/* Search Traffic */}
+                <Card>
+                  <BlockStack gap="400">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Text as="h2" variant="headingMd">
+                        Search Traffic
+                      </Text>
+                      <Badge tone="info">30 days</Badge>
+                    </InlineStack>
+
+                    <InlineStack gap="800" blockAlign="start" wrap={false}>
+                      <BlockStack gap="100">
+                        <Text as="p" variant="heading2xl" fontWeight="bold">
+                          {totalTraffic.toLocaleString()}
+                        </Text>
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Total organic clicks
+                        </Text>
+                      </BlockStack>
+                    </InlineStack>
+
+                    <Divider />
+
+                    <InlineGrid columns={3} gap="400">
+                      <BlockStack gap="200">
+                        <InlineStack gap="200" blockAlign="center">
+                          <Text as="p" variant="headingLg">
+                            {traffic.ga4Organic.toLocaleString()}
+                          </Text>
+                        </InlineStack>
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Google (via GA4)
+                        </Text>
+                        {!engines.hasGa4 ? (
+                          <Badge tone="attention" size="small">Not connected</Badge>
+                        ) : (
+                          <Badge tone="success" size="small">Connected</Badge>
+                        )}
+                      </BlockStack>
+
+                      <BlockStack gap="200">
+                        <Text as="p" variant="headingLg">
+                          {traffic.bingClicks.toLocaleString()}
+                        </Text>
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Bing
+                        </Text>
+                        {!engines.hasBing ? (
+                          <Badge tone="attention" size="small">Not connected</Badge>
+                        ) : (
+                          <Badge tone="success" size="small">Connected</Badge>
+                        )}
+                      </BlockStack>
+
+                      <BlockStack gap="200">
+                        <Text as="p" variant="headingLg">
+                          {traffic.yandexClicks.toLocaleString()}
+                        </Text>
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Yandex
+                        </Text>
+                        {!engines.hasYandex ? (
+                          <Badge tone="attention" size="small">Not connected</Badge>
+                        ) : (
+                          <Badge tone="success" size="small">Connected</Badge>
+                        )}
+                      </BlockStack>
+                    </InlineGrid>
+                  </BlockStack>
+                </Card>
+
+                {/* Quick Actions */}
+                <Card>
+                  <BlockStack gap="400">
+                    <Text as="h2" variant="headingMd">
+                      Quick Actions
+                    </Text>
+                    <BlockStack gap="300">
+                      <Button
+                        variant="primary"
+                        icon={SearchIcon}
+                        fullWidth
+                        onClick={() => navigate("/app/indexing")}
+                      >
+                        Submit URLs for Indexing
+                      </Button>
+                      <Button
+                        icon={ViewIcon}
+                        fullWidth
+                        onClick={() => navigate("/app/visibility")}
+                      >
+                        AI Visibility & Schema Audit
+                      </Button>
+                      <Button
+                        icon={SettingsIcon}
+                        fullWidth
+                        onClick={() => navigate("/app/settings")}
+                      >
+                        Settings & Connections
+                      </Button>
+                    </BlockStack>
+
+                    <Divider />
+
+                    <BlockStack gap="200">
+                      <Text as="p" variant="headingSm">
+                        Index Summary
+                      </Text>
+                      <InlineStack align="space-between">
+                        <Text as="span" variant="bodySm" tone="subdued">
+                          Indexed URLs
+                        </Text>
+                        <Text as="span" variant="bodySm">
+                          {stats.indexedUrls} / {stats.totalTrackedUrls}
+                        </Text>
+                      </InlineStack>
+                      <ProgressBar
+                        progress={stats.totalTrackedUrls > 0 ? (stats.indexedUrls / stats.totalTrackedUrls) * 100 : 0}
+                        size="small"
+                        tone="primary"
+                      />
+                    </BlockStack>
+                  </BlockStack>
+                </Card>
+              </InlineGrid>
+
+              {/* AI Traffic */}
+              <Card>
+                <BlockStack gap="400">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text as="h2" variant="headingMd">
+                      AI Traffic
+                    </Text>
+                    <Badge tone="info">30 days</Badge>
+                  </InlineStack>
+
+                  {!engines.hasGa4 ? (
+                    <Banner
+                      tone="info"
+                      action={{ content: "Connect Google", onAction: () => navigate("/app/settings?tab=connections") }}
+                    >
+                      <Text as="p" variant="bodyMd">
+                        Connect your Google Analytics to see how much traffic AI platforms (ChatGPT, Perplexity, Gemini) send to your store.
+                      </Text>
+                    </Banner>
+                  ) : aiTraffic.totalAISessions === 0 ? (
+                    <BlockStack gap="300">
+                      <InlineGrid columns={{ xs: 2, md: 4 }} gap="400">
+                        <BlockStack gap="100">
+                          <Text as="p" variant="heading2xl" fontWeight="bold">0</Text>
+                          <Text as="p" variant="bodySm" tone="subdued">AI Sessions</Text>
+                        </BlockStack>
+                        <BlockStack gap="100">
+                          <Text as="p" variant="heading2xl" fontWeight="bold">0%</Text>
+                          <Text as="p" variant="bodySm" tone="subdued">Share of Total Traffic</Text>
+                        </BlockStack>
+                      </InlineGrid>
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        No AI-sourced traffic detected yet. As AI platforms like ChatGPT and Perplexity start
+                        referencing your store, sessions will appear here.
+                      </Text>
+                    </BlockStack>
+                  ) : (
+                    <BlockStack gap="400">
+                      <InlineGrid columns={{ xs: 2, md: 4 }} gap="400">
+                        <BlockStack gap="100">
+                          <Text as="p" variant="heading2xl" fontWeight="bold">
+                            {aiTraffic.totalAISessions.toLocaleString()}
+                          </Text>
+                          <Text as="p" variant="bodySm" tone="subdued">AI Sessions</Text>
+                        </BlockStack>
+                        <BlockStack gap="100">
+                          <Text as="p" variant="heading2xl" fontWeight="bold">
+                            {aiTraffic.totalAIUsers.toLocaleString()}
+                          </Text>
+                          <Text as="p" variant="bodySm" tone="subdued">AI Users</Text>
+                        </BlockStack>
+                        <BlockStack gap="100">
+                          <Text as="p" variant="heading2xl" fontWeight="bold">
+                            {aiTraffic.aiShareOfTotal}%
+                          </Text>
+                          <Text as="p" variant="bodySm" tone="subdued">Share of Total Traffic</Text>
+                        </BlockStack>
+                      </InlineGrid>
+
+                      {aiTraffic.sources.length > 0 && (
+                        <>
+                          <Divider />
+                          <Text as="h3" variant="headingSm">Top AI Sources</Text>
+                          <BlockStack gap="200">
+                            {aiTraffic.sources.slice(0, 5).map((src) => (
+                              <InlineStack key={src.source} align="space-between" blockAlign="center">
+                                <Text as="span" variant="bodyMd">{src.source}</Text>
+                                <Badge>{src.sessions.toLocaleString()} sessions</Badge>
+                              </InlineStack>
+                            ))}
+                          </BlockStack>
+                        </>
+                      )}
+                    </BlockStack>
+                  )}
+                </BlockStack>
+              </Card>
+
+              {/* Recent Activity */}
+              <Card>
+                <BlockStack gap="400">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text as="h2" variant="headingMd">
+                      Recent Activity
+                    </Text>
+                    {recentActivity.length > 0 && (
+                      <Badge>{recentActivity.length} events</Badge>
+                    )}
+                  </InlineStack>
+
+                  {timelineItems.length > 0 ? (
+                    <Timeline items={timelineItems} />
+                  ) : (
+                    <Box paddingBlock="800">
+                      <EmptyState
+                        heading="No activity yet"
+                        image=""
+                      >
+                        <Text as="p" tone="subdued">
+                          Submit some URLs to see your activity feed here. IndexBeam tracks every submission, index check, and visibility scan.
+                        </Text>
+                      </EmptyState>
+                    </Box>
+                  )}
+                </BlockStack>
+              </Card>
+            </BlockStack>
+          </PolarisProvider>
         )}
-      </s-section>
-
-      <s-section slot="aside" heading="App template specs">
-        <s-paragraph>
-          <s-text>Framework: </s-text>
-          <s-link href="https://reactrouter.com/" target="_blank">
-            React Router
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Interface: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/app-home/using-polaris-components"
-            target="_blank"
-          >
-            Polaris web components
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>API: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            GraphQL
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Database: </s-text>
-          <s-link href="https://www.prisma.io/" target="_blank">
-            Prisma
-          </s-link>
-        </s-paragraph>
-      </s-section>
-
-      <s-section slot="aside" heading="Next steps">
-        <s-unordered-list>
-          <s-list-item>
-            Build an{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/getting-started/build-app-example"
-              target="_blank"
-            >
-              example app
-            </s-link>
-          </s-list-item>
-          <s-list-item>
-            Explore Shopify&apos;s API with{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/tools/graphiql-admin-api"
-              target="_blank"
-            >
-              GraphiQL
-            </s-link>
-          </s-list-item>
-        </s-unordered-list>
-      </s-section>
+      </ClientOnly>
     </s-page>
   );
 }
