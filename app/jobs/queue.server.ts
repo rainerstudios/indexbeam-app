@@ -8,7 +8,8 @@ function getConnection() {
     const url = process.env.REDIS_URL || "redis://localhost:6379";
     connection = new IORedis(url, {
       maxRetriesPerRequest: null,
-      ...(url.startsWith("rediss://") ? { tls: {} } : {}),
+      family: 4,
+      ...(url.startsWith("rediss://") ? { tls: { rejectUnauthorized: false } } : {}),
     });
   }
   return connection;
