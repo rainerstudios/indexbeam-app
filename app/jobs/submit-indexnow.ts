@@ -2,7 +2,6 @@ import type { Job } from "bullmq";
 import { submitUrl } from "../services/indexnow.server";
 import { trackUrlSubmission } from "../services/ga4.server";
 import { decrypt } from "../lib/encryption.server";
-import { waitForToken } from "../lib/rate-limiter.server";
 import prisma from "../db.server";
 
 interface IndexNowJobData {
@@ -25,7 +24,6 @@ export async function processIndexNowJob(job: Job<IndexNowJobData>) {
 
   for (const engine of ["bing", "yandex"] as const) {
     try {
-      await waitForToken("indexnow");
       const result = await submitUrl(
         url,
         shopDomain,

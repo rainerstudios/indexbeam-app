@@ -17,7 +17,7 @@ connection.on("error", (err) => console.error("[Redis] Error:", err.message));
 
 const indexNowWorker = new Worker("indexnow-submit", processIndexNowJob, {
   connection,
-  concurrency: 5,
+  concurrency: 2,
 });
 
 const indexCheckWorker = new Worker("index-check", processIndexCheckJob, {
