@@ -143,24 +143,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const url = formData.get("url") as string;
     if (!url) return { error: "URL is required" };
     try {
-      const { indexNowQueue } = await import("../jobs/queue.server");
-      await indexNowQueue.add("submit", {
-        storeId: store.id,
-        url,
-        source: "manual",
-        shopDomain: session.shop,
-        indexnowKey: store.indexnowKey,
-      });
+      const { submitUrl } = await import("../services/indexnow.server");
+      const keyLocation = `https://${session.shop}/apps/indexnow/${store.indexnowKey}.txt`;
+      let submitted = 0;
+      for (const engine of ["bing", "yandex"] as const) {
+        try {
+          const result = await submitUrl(url, session.shop, store.indexnowKey!, engine, keyLocation);
+          await prisma.urlSubmission.create({
+            data: {
+              storeId: store.id, url, status: result.success ? "sent" : "failed",
+              responseCode: result.status, source: "manual", engine,
+              errorMessage: result.success ? null : result.message,
+            },
+          });
+          if (result.success) submitted++;
+        } catch (err) {
+          await prisma.urlSubmission.create({
+            data: { storeId: store.id, url, status: "failed", source: "manual", engine, errorMessage: (err as Error).message },
+          });
+        }
+      }
       await prisma.activityLog.create({
-        data: {
-          storeId: store.id,
-          type: "indexnow_submit",
-          message: `Manual submission queued: ${url}`,
-        },
+        data: { storeId: store.id, type: "indexnow_submit", message: `Submitted ${url} to ${submitted} engines` },
       });
-      return { success: true, message: `URL queued: ${url}` };
+      return { success: true, message: `URL submitted to ${submitted} engines` };
     } catch {
-      return { error: "Failed to queue URL submission." };
+      return { error: "Failed to submit URL." };
     }
   }
 
@@ -174,27 +182,37 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const products = data.data?.products?.nodes || [];
       if (products.length === 0) return { error: "No products found." };
 
-      const { indexNowQueue } = await import("../jobs/queue.server");
+      const { submitUrl } = await import("../services/indexnow.server");
+      const keyLocation = `https://${session.shop}/apps/indexnow/${store.indexnowKey}.txt`;
+      let submitted = 0;
+      let failed = 0;
       for (const product of products) {
         const productUrl = `https://${session.shop}/products/${product.handle}`;
-        await indexNowQueue.add("submit", {
-          storeId: store.id,
-          url: productUrl,
-          source: "batch",
-          shopDomain: session.shop,
-          indexnowKey: store.indexnowKey,
-        });
+        for (const engine of ["bing", "yandex"] as const) {
+          try {
+            const result = await submitUrl(productUrl, session.shop, store.indexnowKey!, engine, keyLocation);
+            await prisma.urlSubmission.create({
+              data: {
+                storeId: store.id, url: productUrl, status: result.success ? "sent" : "failed",
+                responseCode: result.status, source: "batch", engine,
+                errorMessage: result.success ? null : result.message,
+              },
+            });
+            if (result.success) submitted++; else failed++;
+          } catch (err) {
+            await prisma.urlSubmission.create({
+              data: { storeId: store.id, url: productUrl, status: "failed", source: "batch", engine, errorMessage: (err as Error).message },
+            });
+            failed++;
+          }
+        }
       }
       await prisma.activityLog.create({
-        data: {
-          storeId: store.id,
-          type: "indexnow_submit",
-          message: `Batch: ${products.length} products queued`,
-        },
+        data: { storeId: store.id, type: "indexnow_submit", message: `Batch: ${submitted} sent, ${failed} failed (${products.length} products)` },
       });
       return {
         success: true,
-        message: `${products.length} product URLs queued!`,
+        message: `${products.length} products submitted (${submitted} sent, ${failed} failed)`,
       };
     } catch {
       return { error: "Batch submission failed." };
