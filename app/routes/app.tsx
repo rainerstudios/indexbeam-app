@@ -18,6 +18,7 @@ export default function App() {
       <s-app-nav>
         <s-link href="/app">Dashboard</s-link>
         <s-link href="/app/indexing">Indexing</s-link>
+        <s-link href="/app/seo">SEO</s-link>
         <s-link href="/app/visibility">AI Visibility</s-link>
         <s-link href="/app/settings">Settings</s-link>
       </s-app-nav>

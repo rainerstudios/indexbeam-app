@@ -33,6 +33,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       googleTokenExpiresAt: null,
       googleScopes: null,
       googleEmail: null,
+      ga4PropertyId: null,
     },
   });
 

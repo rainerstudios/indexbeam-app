@@ -1,5 +1,29 @@
 const BASE_URL = "https://ssl.bing.com/webmaster/api.svc/json";
 
+export interface BingAuth {
+  apiKey?: string;
+  oauthToken?: string;
+}
+
+/**
+ * Build fetch options with proper auth. OAuth uses Bearer header; API key uses query param.
+ */
+function buildUrl(endpoint: string, siteUrl: string, auth: BingAuth, extraParams?: Record<string, string>): string {
+  const params = new URLSearchParams({ siteUrl });
+  if (auth.apiKey) params.set("apikey", auth.apiKey);
+  if (extraParams) {
+    for (const [k, v] of Object.entries(extraParams)) params.set(k, v);
+  }
+  return `${BASE_URL}/${endpoint}?${params.toString()}`;
+}
+
+function authHeaders(auth: BingAuth): Record<string, string> {
+  if (auth.oauthToken) {
+    return { Authorization: `Bearer ${auth.oauthToken}` };
+  }
+  return {};
+}
+
 interface UrlInfo {
   indexed: boolean;
   lastCrawl: Date | null;
@@ -7,12 +31,13 @@ interface UrlInfo {
 }
 
 export async function getUrlInfo(
-  apiKey: string,
+  auth: BingAuth,
   siteUrl: string,
   url: string
 ): Promise<UrlInfo> {
   const response = await fetch(
-    `${BASE_URL}/GetUrlInfo?siteUrl=${encodeURIComponent(siteUrl)}&url=${encodeURIComponent(url)}&apikey=${apiKey}`
+    buildUrl("GetUrlInfo", siteUrl, auth, { url }),
+    { headers: authHeaders(auth) }
   );
 
   if (!response.ok) {
@@ -32,11 +57,12 @@ export async function getUrlInfo(
 }
 
 export async function getCrawlStats(
-  apiKey: string,
+  auth: BingAuth,
   siteUrl: string
 ): Promise<{ crawledPages: number; inIndex: number; crawlErrors: number }> {
   const response = await fetch(
-    `${BASE_URL}/GetCrawlStats?siteUrl=${encodeURIComponent(siteUrl)}&apikey=${apiKey}`
+    buildUrl("GetCrawlStats", siteUrl, auth),
+    { headers: authHeaders(auth) }
   );
 
   if (!response.ok) {
@@ -63,11 +89,12 @@ export interface BingTrafficData {
 }
 
 export async function getSearchTraffic(
-  apiKey: string,
+  auth: BingAuth,
   siteUrl: string
 ): Promise<BingTrafficData[]> {
   const response = await fetch(
-    `${BASE_URL}/GetRankAndTrafficStats?siteUrl=${encodeURIComponent(siteUrl)}&apikey=${apiKey}`
+    buildUrl("GetRankAndTrafficStats", siteUrl, auth),
+    { headers: authHeaders(auth) }
   );
 
   if (!response.ok) {
@@ -94,12 +121,142 @@ export interface BingPageTraffic {
   impressions: number;
 }
 
+export async function submitUrl(
+  auth: BingAuth,
+  siteUrl: string,
+  url: string
+): Promise<{ success: boolean; status: number }> {
+  const response = await fetch(buildUrl("SubmitUrl", siteUrl, auth), {
+    method: "POST",
+    headers: { ...authHeaders(auth), "Content-Type": "application/json" },
+    body: JSON.stringify({ siteUrl, url }),
+  });
+  return { success: response.ok, status: response.status };
+}
+
+export async function submitUrlBatch(
+  auth: BingAuth,
+  siteUrl: string,
+  urls: string[]
+): Promise<{ success: boolean; status: number }> {
+  const response = await fetch(buildUrl("SubmitUrlBatch", siteUrl, auth), {
+    method: "POST",
+    headers: { ...authHeaders(auth), "Content-Type": "application/json" },
+    body: JSON.stringify({ siteUrl, urlList: urls }),
+  });
+  return { success: response.ok, status: response.status };
+}
+
+export async function getUrlSubmissionQuota(
+  auth: BingAuth,
+  siteUrl: string
+): Promise<{ dailyQuota: number; monthlyQuota: number }> {
+  const response = await fetch(buildUrl("GetUrlSubmissionQuota", siteUrl, auth), {
+    headers: authHeaders(auth),
+  });
+  if (!response.ok) {
+    throw new Error(`Bing quota API error: ${response.status}`);
+  }
+  const data: any = await response.json();
+  const d = data?.d || data;
+  return {
+    dailyQuota: d?.DailyQuota ?? 0,
+    monthlyQuota: d?.MonthlyQuota ?? 0,
+  };
+}
+
+export interface BingQueryStat {
+  query: string;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  avgPosition: number;
+}
+
+export async function getQueryStats(
+  auth: BingAuth,
+  siteUrl: string
+): Promise<BingQueryStat[]> {
+  const response = await fetch(buildUrl("GetQueryStats", siteUrl, auth), {
+    headers: authHeaders(auth),
+  });
+  if (!response.ok) {
+    throw new Error(`Bing query stats API error: ${response.status}`);
+  }
+  const data: any = await response.json();
+  const stats = data?.d || [];
+  return stats
+    .map((entry: any) => ({
+      query: entry.Query || "",
+      clicks: entry.Clicks || 0,
+      impressions: entry.Impressions || 0,
+      ctr:
+        entry.Clicks && entry.Impressions
+          ? Math.round((entry.Clicks / entry.Impressions) * 10000) / 100
+          : 0,
+      avgPosition: entry.AvgClickPosition || 0,
+    }))
+    .sort((a: BingQueryStat, b: BingQueryStat) => b.clicks - a.clicks)
+    .slice(0, 20);
+}
+
+export interface BingCrawlIssue {
+  url: string;
+  severity: string;
+  crawlError: string;
+}
+
+export async function getCrawlIssues(
+  auth: BingAuth,
+  siteUrl: string
+): Promise<BingCrawlIssue[]> {
+  const response = await fetch(buildUrl("GetCrawlIssues", siteUrl, auth), {
+    headers: authHeaders(auth),
+  });
+  if (!response.ok) {
+    throw new Error(`Bing crawl issues API error: ${response.status}`);
+  }
+  const data: any = await response.json();
+  const issues = data?.d || [];
+  return issues.map((entry: any) => ({
+    url: entry.Url || "",
+    severity: entry.Severity?.toString() || "unknown",
+    crawlError: entry.Message || entry.CrawlError || "",
+  }));
+}
+
+export async function addSite(
+  auth: BingAuth,
+  siteUrl: string
+): Promise<{ success: boolean; status: number }> {
+  const response = await fetch(`${BASE_URL}/AddSite`, {
+    method: "POST",
+    headers: { ...authHeaders(auth), "Content-Type": "application/json" },
+    body: JSON.stringify({ siteUrl }),
+  });
+  return { success: response.ok, status: response.status };
+}
+
+export async function submitFeed(
+  auth: BingAuth,
+  siteUrl: string,
+  feedUrl: string
+): Promise<{ success: boolean; status: number }> {
+  const response = await fetch(buildUrl("SubmitFeed", siteUrl, auth), {
+    method: "POST",
+    headers: { ...authHeaders(auth), "Content-Type": "application/json" },
+    body: JSON.stringify({ siteUrl, feedUrl }),
+  });
+  return { success: response.ok, status: response.status };
+}
+
 export async function getPageTraffic(
-  apiKey: string,
+  auth: BingAuth,
   siteUrl: string
 ): Promise<BingPageTraffic[]> {
   const response = await fetch(
-    `${BASE_URL}/GetPageStats?siteUrl=${encodeURIComponent(siteUrl)}&apikey=${apiKey}`
+    buildUrl("GetPageStats", siteUrl, auth),
+    { headers: authHeaders(auth) }
   );
 
   if (!response.ok) {

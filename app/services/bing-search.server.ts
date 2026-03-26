@@ -1,10 +1,11 @@
-const BING_SEARCH_ENDPOINT = "https://api.bing.microsoft.com/v7.0/search";
+/**
+ * Web search via SearXNG (self-hosted meta-search engine).
+ * Replaces Bing Search API v7 which is being retired Aug 2026.
+ * Falls back to merchant's own Bing Search API key if configured.
+ */
 
-function getAppBingSearchKey(): string {
-  const key = process.env.BING_SEARCH_API_KEY;
-  if (!key) throw new Error("BING_SEARCH_API_KEY not configured");
-  return key;
-}
+const SEARXNG_ENDPOINT =
+  process.env.SEARXNG_URL || "http://localhost:8080/search";
 
 interface SearchResult {
   url: string;
@@ -15,15 +16,59 @@ interface SearchResult {
 }
 
 /**
- * Search Bing Web Search API.
- * Uses the app's own API key by default. Pass an explicit key to override.
+ * Search the web using SearXNG.
+ * If apiKeyOrNull is provided (merchant's Bing key), uses Bing API directly as fallback.
+ * Otherwise uses the self-hosted SearXNG instance.
  */
 export async function searchWeb(
   apiKeyOrNull: string | null,
   query: string,
   count: number = 10
 ): Promise<SearchResult[]> {
-  const apiKey = apiKeyOrNull || getAppBingSearchKey();
+  // If merchant has their own Bing Search key, use it directly
+  if (apiKeyOrNull) {
+    return searchViaBing(apiKeyOrNull, query, count);
+  }
+
+  // Use SearXNG
+  const params = new URLSearchParams({
+    q: query,
+    format: "json",
+    categories: "general",
+    language: "en",
+    pageno: "1",
+  });
+
+  const response = await fetch(`${SEARXNG_ENDPOINT}?${params}`, {
+    headers: { Accept: "application/json" },
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `SearXNG search error: ${response.status} ${response.statusText}`
+    );
+  }
+
+  const data: any = await response.json();
+  const results = data.results || [];
+
+  return results.slice(0, count).map((item: any, index: number) => ({
+    url: item.url,
+    displayUrl: item.pretty_url || item.url,
+    name: item.title || "",
+    snippet: item.content || "",
+    position: index + 1,
+  }));
+}
+
+/**
+ * Fallback: search via Bing Search API v7 (for merchants with their own key).
+ */
+async function searchViaBing(
+  apiKey: string,
+  query: string,
+  count: number
+): Promise<SearchResult[]> {
   const params = new URLSearchParams({
     q: query,
     count: count.toString(),
@@ -31,9 +76,10 @@ export async function searchWeb(
     mkt: "en-US",
   });
 
-  const response = await fetch(`${BING_SEARCH_ENDPOINT}?${params}`, {
-    headers: { "Ocp-Apim-Subscription-Key": apiKey },
-  });
+  const response = await fetch(
+    `https://api.bing.microsoft.com/v7.0/search?${params}`,
+    { headers: { "Ocp-Apim-Subscription-Key": apiKey } }
+  );
 
   if (!response.ok) {
     throw new Error(

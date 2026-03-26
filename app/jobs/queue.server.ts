@@ -44,3 +44,13 @@ export const visibilityScanQueue = new Queue("visibility-scan", {
     removeOnFail: { count: 1000 },
   },
 });
+
+export const weeklyDigestQueue = new Queue("weekly-digest", {
+  connection: getConnection(),
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: "exponential", delay: 5000 },
+    removeOnComplete: { count: 500 },
+    removeOnFail: { count: 1000 },
+  },
+});

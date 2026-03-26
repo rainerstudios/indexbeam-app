@@ -21,9 +21,9 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>IndexBeam: IndexNow & AI SEO</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Get your products indexed instantly and track your AI search visibility across ChatGPT, Perplexity, and Gemini.
         </p>
         {showForm && (
           <Form className={styles.form} method="post" action="/auth/login">
@@ -39,16 +39,13 @@ export default function App() {
         )}
         <ul className={styles.list}>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Instant Indexing</strong>. Automatically submit new and updated products to Bing and Yandex via IndexNow — no configuration needed.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>AI Visibility Tracking</strong>. See if AI platforms like ChatGPT and Perplexity recommend your brand when people search for your products.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>SEO & Schema Audit</strong>. Track your search rankings, audit structured data on your product pages, and get actionable recommendations.
           </li>
         </ul>
       </div>

@@ -1,5 +1,3 @@
-const FIRECRAWL_BASE = process.env.FIRECRAWL_BASE_URL || "https://fire.xgaming.pro/v1";
-
 interface ScrapeResult {
   markdown: string;
   metadata: Record<string, any>;
@@ -7,28 +5,28 @@ interface ScrapeResult {
 }
 
 export async function scrapeUrl(url: string): Promise<ScrapeResult> {
-  const apiKey = process.env.FIRECRAWL_API_KEY || "";
-
-  const response = await fetch(`${FIRECRAWL_BASE}/scrape`, {
-    method: "POST",
+  const response = await fetch(url, {
     headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+      "User-Agent": "IndexBeam/1.0 (Schema Auditor)",
+      Accept: "text/html",
     },
-    body: JSON.stringify({ url, formats: ["markdown", "html"] }),
+    redirect: "follow",
   });
 
   if (!response.ok) {
-    throw new Error(
-      `Firecrawl API error: ${response.status} ${response.statusText}`
-    );
+    throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
   }
 
-  const data: any = await response.json();
+  const html = await response.text();
+
+  // Extract title from HTML
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = titleMatch ? titleMatch[1].trim() : "";
+
   return {
-    markdown: data.data?.markdown || "",
-    metadata: data.data?.metadata || {},
-    html: data.data?.html,
+    markdown: "",
+    metadata: { title },
+    html,
   };
 }
 

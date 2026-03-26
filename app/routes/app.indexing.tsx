@@ -4,7 +4,7 @@ import type {
   LoaderFunctionArgs,
 } from "react-router";
 import { useLoaderData, useFetcher, useSearchParams } from "react-router";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
@@ -18,24 +18,21 @@ import {
   Text,
   TextField,
   Button,
-  ButtonGroup,
   Badge,
   DataTable,
-  Tabs,
   Banner,
   Box,
   ProgressBar,
   EmptyState,
   Divider,
+  Collapsible,
   Pagination,
-  Filters,
-  ChoiceList,
 } from "@shopify/polaris";
+import { ChevronDownIcon, ChevronUpIcon } from "@shopify/polaris-icons";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
-  const tab = url.searchParams.get("tab") || "submit";
   const page = parseInt(url.searchParams.get("page") || "1");
   const status = url.searchParams.get("status") || undefined;
   const pageSize = 25;
@@ -45,7 +42,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
   if (!store)
     return {
-      tab,
       submissions: [],
       total: 0,
       page,
@@ -53,6 +49,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       statuses: [],
       summary: { total: 0, bingIndexed: 0, googleIndexed: 0 },
       hasGa4: false,
+      bingQuota: null as { dailyQuota: number; monthlyQuota: number } | null,
     };
 
   const where: any = { storeId: store.id };
@@ -102,8 +99,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     } catch {}
   }
 
+  // Fetch Bing submission quota if OAuth connected
+  let bingQuota: { dailyQuota: number; monthlyQuota: number } | null = null;
+  if (store.bingRefreshToken) {
+    try {
+      const { getBingAccessToken } = await import("../lib/bing-oauth.server");
+      const { getUrlSubmissionQuota } = await import("../services/bing-webmaster.server");
+      const bingToken = await getBingAccessToken(store.id);
+      if (bingToken) {
+        bingQuota = await getUrlSubmissionQuota(
+          { oauthToken: bingToken },
+          `https://${store.shopDomain}`
+        );
+      }
+    } catch {}
+  }
+
   return {
-    tab,
     submissions: submissions.map((s) => ({
       ...s,
       submittedAt: s.submittedAt.toISOString(),
@@ -126,6 +138,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }),
     summary,
     hasGa4,
+    bingQuota,
   };
 };
 
@@ -142,13 +155,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "submit-url") {
     const url = formData.get("url") as string;
     if (!url) return { error: "URL is required" };
+    if (!store.indexnowKey) return { error: "IndexNow key not generated. Go to Settings to generate one." };
     try {
       const { submitUrl } = await import("../services/indexnow.server");
-      const keyLocation = `https://${session.shop}/apps/indexnow/${store.indexnowKey}.txt`;
       let submitted = 0;
       for (const engine of ["bing", "yandex"] as const) {
         try {
-          const result = await submitUrl(url, session.shop, store.indexnowKey!, engine, keyLocation);
+          const result = await submitUrl(url, session.shop, store.indexnowKey, engine);
           await prisma.urlSubmission.create({
             data: {
               storeId: store.id, url, status: result.success ? "sent" : "failed",
@@ -163,6 +176,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           });
         }
       }
+      // Also submit via Bing Webmaster API if OAuth connected
+      if (store.bingRefreshToken) {
+        try {
+          const { getBingAccessToken } = await import("../lib/bing-oauth.server");
+          const bingWebmaster = await import("../services/bing-webmaster.server");
+          const bingToken = await getBingAccessToken(store.id);
+          if (bingToken) {
+            const bingResult = await bingWebmaster.submitUrl(
+              { oauthToken: bingToken },
+              `https://${session.shop}`,
+              url
+            );
+            await prisma.urlSubmission.create({
+              data: {
+                storeId: store.id, url, status: bingResult.success ? "sent" : "failed",
+                responseCode: bingResult.status, source: "manual", engine: "bing-api",
+                errorMessage: bingResult.success ? null : `HTTP ${bingResult.status}`,
+              },
+            });
+            if (bingResult.success) submitted++;
+          }
+        } catch {}
+      }
+
       await prisma.activityLog.create({
         data: { storeId: store.id, type: "indexnow_submit", message: `Submitted ${url} to ${submitted} engines` },
       });
@@ -182,37 +219,67 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const products = data.data?.products?.nodes || [];
       if (products.length === 0) return { error: "No products found." };
 
-      const { submitUrl } = await import("../services/indexnow.server");
-      const keyLocation = `https://${session.shop}/apps/indexnow/${store.indexnowKey}.txt`;
+      if (!store.indexnowKey) return { error: "IndexNow key not generated. Go to Settings to generate one." };
+      const { submitBatch } = await import("../services/indexnow.server");
+      const urls = products.map((p: any) => `https://${session.shop}/products/${p.handle}`);
+
       let submitted = 0;
       let failed = 0;
-      for (const product of products) {
-        const productUrl = `https://${session.shop}/products/${product.handle}`;
-        for (const engine of ["bing", "yandex"] as const) {
-          try {
-            const result = await submitUrl(productUrl, session.shop, store.indexnowKey!, engine, keyLocation);
+      for (const engine of ["bing", "yandex"] as const) {
+        try {
+          const result = await submitBatch(urls, session.shop, store.indexnowKey, engine);
+          // Log each URL in the batch for the submission log
+          for (const url of urls) {
             await prisma.urlSubmission.create({
               data: {
-                storeId: store.id, url: productUrl, status: result.success ? "sent" : "failed",
+                storeId: store.id, url, status: result.success ? "sent" : "failed",
                 responseCode: result.status, source: "batch", engine,
                 errorMessage: result.success ? null : result.message,
               },
             });
-            if (result.success) submitted++; else failed++;
-          } catch (err) {
-            await prisma.urlSubmission.create({
-              data: { storeId: store.id, url: productUrl, status: "failed", source: "batch", engine, errorMessage: (err as Error).message },
-            });
-            failed++;
           }
+          if (result.success) submitted++; else failed++;
+        } catch (err) {
+          for (const url of urls) {
+            await prisma.urlSubmission.create({
+              data: { storeId: store.id, url, status: "failed", source: "batch", engine, errorMessage: (err as Error).message },
+            });
+          }
+          failed++;
         }
       }
+      // Also submit via Bing Webmaster API if OAuth connected
+      if (store.bingRefreshToken) {
+        try {
+          const { getBingAccessToken } = await import("../lib/bing-oauth.server");
+          const bingWebmaster = await import("../services/bing-webmaster.server");
+          const bingToken = await getBingAccessToken(store.id);
+          if (bingToken) {
+            const bingResult = await bingWebmaster.submitUrlBatch(
+              { oauthToken: bingToken },
+              `https://${session.shop}`,
+              urls
+            );
+            for (const url of urls) {
+              await prisma.urlSubmission.create({
+                data: {
+                  storeId: store.id, url, status: bingResult.success ? "sent" : "failed",
+                  responseCode: bingResult.status, source: "batch", engine: "bing-api",
+                  errorMessage: bingResult.success ? null : `HTTP ${bingResult.status}`,
+                },
+              });
+            }
+            if (bingResult.success) submitted++; else failed++;
+          }
+        } catch { failed++; }
+      }
+
       await prisma.activityLog.create({
-        data: { storeId: store.id, type: "indexnow_submit", message: `Batch: ${submitted} sent, ${failed} failed (${products.length} products)` },
+        data: { storeId: store.id, type: "indexnow_submit", message: `Batch: ${urls.length} URLs × ${submitted} engines sent (${failed} engine failures)` },
       });
       return {
         success: true,
-        message: `${products.length} products submitted (${submitted} sent, ${failed} failed)`,
+        message: `${urls.length} product URLs submitted to ${submitted} engines via batch API`,
       };
     } catch {
       return { error: "Batch submission failed." };
@@ -220,16 +287,89 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "recheck-all") {
-    const { indexCheckQueue } = await import("../jobs/queue.server");
-    await indexCheckQueue.add("check", { storeId: store.id });
-    return { success: true, message: "Index re-check queued." };
+    // Run index checks synchronously (no Redis dependency)
+    const submittedUrls = await prisma.urlSubmission.findMany({
+      where: { storeId: store.id, status: "sent" },
+      distinct: ["url"],
+      select: { url: true },
+    });
+
+    if (submittedUrls.length === 0) {
+      return { error: "No submitted URLs to check." };
+    }
+
+    let checked = 0;
+    for (const { url } of submittedUrls) {
+      const updateData: any = { lastCheckedAt: new Date() };
+
+      // Check Google index status via OAuth
+      try {
+        const { getGoogleAccessToken } = await import("../lib/google-oauth.server");
+        const oauthToken = await getGoogleAccessToken(store.id);
+        if (oauthToken) {
+          const { inspectUrl } = await import("../services/gsc.server");
+          const gscResult = await inspectUrl(oauthToken, `https://${store.shopDomain}`, url, true);
+          updateData.googleIndexed = gscResult.indexed;
+          updateData.googleLastCrawl = gscResult.lastCrawl;
+        }
+      } catch (error) {
+        console.error(`GSC inspection error for ${url}:`, error);
+      }
+
+      // Check Bing index status — prefer OAuth, fall back to API key
+      try {
+        const { getBingAccessToken } = await import("../lib/bing-oauth.server");
+        const bingOAuthToken = await getBingAccessToken(store.id);
+        const bingAuth = bingOAuthToken
+          ? { oauthToken: bingOAuthToken }
+          : store.bingWebmasterApiKey
+            ? { apiKey: (await import("../lib/encryption.server")).decrypt(store.bingWebmasterApiKey) }
+            : null;
+
+        if (bingAuth) {
+          const { getUrlInfo } = await import("../services/bing-webmaster.server");
+          const bingResult = await getUrlInfo(
+            bingAuth,
+            `https://${store.shopDomain}`,
+            url
+          );
+          updateData.bingIndexed = bingResult.indexed;
+          updateData.bingLastCrawl = bingResult.lastCrawl;
+        }
+      } catch (error) {
+        console.error(`Bing index check error for ${url}:`, error);
+      }
+
+      await prisma.urlIndexStatus.upsert({
+        where: { storeId_url: { storeId: store.id, url } },
+        create: { storeId: store.id, url, ...updateData },
+        update: updateData,
+      });
+      checked++;
+    }
+
+    await prisma.activityLog.create({
+      data: {
+        storeId: store.id,
+        type: "index_check",
+        message: `Index status checked for ${checked} URLs`,
+      },
+    });
+
+    return { success: true, message: `Index status checked for ${checked} URLs` };
+  }
+
+  if (intent === "clear-submissions") {
+    await prisma.urlSubmission.deleteMany({ where: { storeId: store.id } });
+    await prisma.urlIndexStatus.deleteMany({ where: { storeId: store.id } });
+    return { success: true, message: "Submission log and index status cleared." };
   }
 
   return null;
 };
 
 export default function IndexingPage() {
-  const { submissions, total, page, pageSize, statuses, summary, hasGa4 } =
+  const { submissions, total, page, pageSize, statuses, summary, hasGa4, bingQuota } =
     useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
   const fetcher = useFetcher();
@@ -237,39 +377,20 @@ export default function IndexingPage() {
   const isSubmitting = fetcher.state !== "idle";
   const actionData = fetcher.data as any;
   const [urlValue, setUrlValue] = useState("");
-  const [selectedTab, setSelectedTab] = useState(() => {
-    const tab = searchParams.get("tab");
-    if (tab === "log") return 1;
-    if (tab === "status") return 2;
-    return 0;
-  });
+  const [showLogs, setShowLogs] = useState(false);
 
   useEffect(() => {
     if (actionData?.success && actionData.message) {
       (window as any).shopify?.toast?.show?.(actionData.message);
-      if (actionData.message.includes("queued")) setUrlValue("");
+      if (actionData.message.includes("submitted") || actionData.message.includes("queued")) setUrlValue("");
     }
     if (actionData?.error) {
-      (window as any).shopify?.toast?.show?.(actionData.error, {
-        isError: true,
-      });
+      (window as any).shopify?.toast?.show?.(actionData.error, { isError: true });
     }
   }, [actionData]);
 
-  const handleTabChange = useCallback((index: number) => {
-    setSelectedTab(index);
-    const tabs = ["submit", "log", "status"];
-    setSearchParams({ tab: tabs[index] });
-  }, [setSearchParams]);
-
   const bingPct = summary.total > 0 ? Math.round((summary.bingIndexed / summary.total) * 100) : 0;
   const googlePct = summary.total > 0 ? Math.round((summary.googleIndexed / summary.total) * 100) : 0;
-
-  const tabs = [
-    { id: "submit", content: "Submit URLs" },
-    { id: "log", content: `Submission Log (${total})` },
-    { id: "status", content: `Index Status (${summary.total})` },
-  ];
 
   // Format submission rows for DataTable
   const submissionRows = submissions.map((sub: any) => [
@@ -277,45 +398,46 @@ export default function IndexingPage() {
       {sub.url.replace(/^https?:\/\//, "").substring(0, 50)}
       {sub.url.replace(/^https?:\/\//, "").length > 50 ? "..." : ""}
     </Text>,
-    <Badge
-      key={`status-${sub.id}`}
-      tone={sub.status === "sent" ? "success" : sub.status === "failed" ? "critical" : "attention"}
-    >
-      {sub.status}
-    </Badge>,
+    sub.responseCode ? (
+      <Badge
+        key={`code-${sub.id}`}
+        tone={sub.responseCode === 200 ? "success" : sub.responseCode === 202 ? "info" : "critical"}
+      >
+        {String(sub.responseCode)}
+      </Badge>
+    ) : (
+      <Badge key={`code-${sub.id}`} tone="attention">—</Badge>
+    ),
     sub.engine || "—",
     sub.source || "—",
     new Date(sub.submittedAt).toLocaleDateString(),
   ]);
 
   // Format index status rows
-  const statusRows = (statuses as any[]).map((s) => {
-    const row = [
-      <Text as="span" variant="bodySm" truncate key={s.id}>
-        {s.url.replace(/^https?:\/\//, "").substring(0, 45)}
-        {s.url.replace(/^https?:\/\//, "").length > 45 ? "..." : ""}
-      </Text>,
-      <Badge
-        key={`bing-${s.id}`}
-        tone={s.bingIndexed ? "success" : s.bingIndexed === false ? "critical" : "attention"}
-      >
-        {s.bingIndexed ? "Indexed" : s.bingIndexed === false ? "Not indexed" : "Unknown"}
-      </Badge>,
-      <Badge
-        key={`google-${s.id}`}
-        tone={s.googleIndexed ? "success" : s.googleIndexed === false ? "critical" : "attention"}
-      >
-        {s.googleIndexed ? "Indexed" : s.googleIndexed === false ? "Not indexed" : "Unknown"}
-      </Badge>,
-      s.sessions !== null ? (
-        <Text as="span" variant="bodySm" key={`traffic-${s.id}`}>
-          {s.sessions.toLocaleString()}
-        </Text>
-      ) : "—",
-      s.lastCheckedAt ? new Date(s.lastCheckedAt).toLocaleDateString() : "Never",
-    ];
-    return row;
-  });
+  const statusRows = (statuses as any[]).map((s) => [
+    <Text as="span" variant="bodySm" truncate key={s.id}>
+      {s.url.replace(/^https?:\/\//, "").substring(0, 45)}
+      {s.url.replace(/^https?:\/\//, "").length > 45 ? "..." : ""}
+    </Text>,
+    <Badge
+      key={`bing-${s.id}`}
+      tone={s.bingIndexed ? "success" : s.bingIndexed === false ? "critical" : "attention"}
+    >
+      {s.bingIndexed ? "Indexed" : s.bingIndexed === false ? "Not indexed" : "Unknown"}
+    </Badge>,
+    <Badge
+      key={`google-${s.id}`}
+      tone={s.googleIndexed ? "success" : s.googleIndexed === false ? "critical" : "attention"}
+    >
+      {s.googleIndexed ? "Indexed" : s.googleIndexed === false ? "Not indexed" : "Unknown"}
+    </Badge>,
+    s.sessions !== null ? (
+      <Text as="span" variant="bodySm" key={`traffic-${s.id}`}>
+        {s.sessions.toLocaleString()}
+      </Text>
+    ) : "—",
+    s.lastCheckedAt ? new Date(s.lastCheckedAt).toLocaleDateString() : "Never",
+  ]);
 
   return (
     <s-page heading="Indexing">
@@ -326,188 +448,213 @@ export default function IndexingPage() {
       >
         {() => (
           <PolarisProvider>
-            <BlockStack gap="400">
-              <Tabs tabs={tabs} selected={selectedTab} onSelect={handleTabChange}>
-                <Box paddingBlockStart="400">
-                  {/* ——— Submit Tab ——— */}
-                  {selectedTab === 0 && (
-                    <BlockStack gap="400">
-                      <Card>
-                        <BlockStack gap="400">
-                          <Text as="h2" variant="headingMd">
-                            Submit a URL
-                          </Text>
-                          <Text as="p" variant="bodySm" tone="subdued">
-                            Submit any URL to Bing and Yandex via IndexNow for instant indexing. The URL will be queued and processed within seconds.
-                          </Text>
-                          <fetcher.Form method="post">
-                            <input type="hidden" name="intent" value="submit-url" />
-                            <InlineStack gap="300" blockAlign="end" wrap={false}>
-                              <div style={{ flexGrow: 1 }}>
-                                <TextField
-                                  label="URL"
-                                  name="url"
-                                  value={urlValue}
-                                  onChange={setUrlValue}
-                                  placeholder="https://your-store.com/products/example"
-                                  autoComplete="off"
-                                  connectedRight={
-                                    <Button
-                                      variant="primary"
-                                      submit
-                                      loading={isSubmitting && fetcher.formData?.get("intent") === "submit-url"}
-                                    >
-                                      Submit
-                                    </Button>
-                                  }
-                                />
-                              </div>
-                            </InlineStack>
-                          </fetcher.Form>
-                        </BlockStack>
-                      </Card>
+            <BlockStack gap="500">
+              {/* ——— Bing Quota ——— */}
+              {bingQuota && (
+                <Card>
+                  <BlockStack gap="200">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Text as="p" variant="headingSm">Bing API Submission Quota</Text>
+                      <Badge tone="info">Direct API</Badge>
+                    </InlineStack>
+                    <InlineGrid columns={2} gap="400">
+                      <BlockStack gap="100">
+                        <Text as="p" variant="bodySm" tone="subdued">Daily Quota</Text>
+                        <Text as="p" variant="headingMd">{bingQuota.dailyQuota.toLocaleString()}</Text>
+                      </BlockStack>
+                      <BlockStack gap="100">
+                        <Text as="p" variant="bodySm" tone="subdued">Monthly Quota</Text>
+                        <Text as="p" variant="headingMd">{bingQuota.monthlyQuota.toLocaleString()}</Text>
+                      </BlockStack>
+                    </InlineGrid>
+                  </BlockStack>
+                </Card>
+              )}
 
-                      <Card>
-                        <BlockStack gap="400">
-                          <Text as="h2" variant="headingMd">
-                            Reindex All Products
-                          </Text>
-                          <Text as="p" variant="bodySm" tone="subdued">
-                            Submits all your product URLs to Bing and Yandex at once. Great for initial setup or after making bulk changes. URLs are throttled automatically to respect rate limits.
-                          </Text>
-                          <fetcher.Form method="post">
-                            <input type="hidden" name="intent" value="submit-batch" />
+              {/* ——— Submit URL ——— */}
+              <Card>
+                <BlockStack gap="400">
+                  <Text as="h2" variant="headingMd">Submit a URL</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Submit any URL to Bing, Yandex (via IndexNow), and the Bing Webmaster API for instant indexing.
+                  </Text>
+                  <fetcher.Form method="post">
+                    <input type="hidden" name="intent" value="submit-url" />
+                    <InlineStack gap="300" blockAlign="end" wrap={false}>
+                      <div style={{ flexGrow: 1 }}>
+                        <TextField
+                          label="URL"
+                          name="url"
+                          value={urlValue}
+                          onChange={setUrlValue}
+                          placeholder="https://your-store.com/products/example"
+                          autoComplete="off"
+                          connectedRight={
                             <Button
+                              variant="primary"
                               submit
-                              loading={isSubmitting && fetcher.formData?.get("intent") === "submit-batch"}
+                              loading={isSubmitting && fetcher.formData?.get("intent") === "submit-url"}
                             >
-                              Reindex All Products
+                              Submit
                             </Button>
-                          </fetcher.Form>
-                        </BlockStack>
-                      </Card>
-                    </BlockStack>
-                  )}
+                          }
+                        />
+                      </div>
+                    </InlineStack>
+                  </fetcher.Form>
+                </BlockStack>
+              </Card>
 
-                  {/* ——— Submission Log Tab ——— */}
-                  {selectedTab === 1 && (
+              {/* ——— Reindex All Products ——— */}
+              <Card>
+                <InlineStack align="space-between" blockAlign="center" wrap={false}>
+                  <BlockStack gap="100">
+                    <Text as="h2" variant="headingMd">Reindex All Products</Text>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Submit all product URLs to all connected engines at once.
+                    </Text>
+                  </BlockStack>
+                  <fetcher.Form method="post">
+                    <input type="hidden" name="intent" value="submit-batch" />
+                    <Button
+                      submit
+                      loading={isSubmitting && fetcher.formData?.get("intent") === "submit-batch"}
+                    >
+                      Reindex All
+                    </Button>
+                  </fetcher.Form>
+                </InlineStack>
+              </Card>
+
+              {/* ——— Index Status ——— */}
+              {!hasGa4 && summary.total > 0 && (
+                <Banner tone="info">
+                  <Text as="p" variant="bodyMd">
+                    Connect Google in Settings to see how many sessions each indexed page is getting.
+                  </Text>
+                </Banner>
+              )}
+
+              <InlineGrid columns={{ xs: 1, sm: 3 }} gap="400">
+                <Card>
+                  <BlockStack gap="200">
+                    <Text as="p" variant="bodySm" tone="subdued">Total URLs Tracked</Text>
+                    <Text as="p" variant="heading2xl">{summary.total}</Text>
+                  </BlockStack>
+                </Card>
+                <Card>
+                  <BlockStack gap="200">
+                    <Text as="p" variant="bodySm" tone="subdued">Bing Indexed</Text>
+                    <InlineStack gap="200" blockAlign="end">
+                      <Text as="p" variant="heading2xl">{summary.bingIndexed}</Text>
+                      <Text as="p" variant="bodySm" tone="subdued">{bingPct}%</Text>
+                    </InlineStack>
+                    <ProgressBar progress={bingPct} size="small" tone="primary" />
+                  </BlockStack>
+                </Card>
+                <Card>
+                  <BlockStack gap="200">
+                    <Text as="p" variant="bodySm" tone="subdued">Google Indexed</Text>
+                    <InlineStack gap="200" blockAlign="end">
+                      <Text as="p" variant="heading2xl">{summary.googleIndexed}</Text>
+                      <Text as="p" variant="bodySm" tone="subdued">{googlePct}%</Text>
+                    </InlineStack>
+                    <ProgressBar progress={googlePct} size="small" tone="primary" />
+                  </BlockStack>
+                </Card>
+              </InlineGrid>
+
+              {/* URL Index Status Table */}
+              <Card padding="0">
+                <Box padding="400" paddingBlockEnd="0">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text as="h2" variant="headingMd">URL Index Status</Text>
+                    <fetcher.Form method="post">
+                      <input type="hidden" name="intent" value="recheck-all" />
+                      <Button
+                        submit
+                        loading={isSubmitting && fetcher.formData?.get("intent") === "recheck-all"}
+                      >
+                        Re-check All
+                      </Button>
+                    </fetcher.Form>
+                  </InlineStack>
+                </Box>
+                {statusRows.length > 0 ? (
+                  <DataTable
+                    columnContentTypes={["text", "text", "text", "numeric", "text"]}
+                    headings={["URL", "Bing", "Google", "Sessions (30d)", "Last Checked"]}
+                    rows={statusRows}
+                    hoverable
+                  />
+                ) : (
+                  <Box padding="600">
+                    <EmptyState heading="No URLs monitored yet">
+                      <Text as="p" tone="subdued">
+                        Submit URLs above, then click "Re-check All" to see their index status.
+                      </Text>
+                    </EmptyState>
+                  </Box>
+                )}
+              </Card>
+
+              {/* ——— Submission Logs (collapsible) ——— */}
+              <Card>
+                <BlockStack gap="400">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Button
+                      variant="plain"
+                      onClick={() => setShowLogs(!showLogs)}
+                      icon={showLogs ? ChevronUpIcon : ChevronDownIcon}
+                      textAlign="left"
+                    >
+                      Submission Log ({total})
+                    </Button>
+                    {total > 0 && (
+                      <fetcher.Form method="post">
+                        <input type="hidden" name="intent" value="clear-submissions" />
+                        <Button
+                          variant="plain"
+                          tone="critical"
+                          submit
+                          loading={isSubmitting && fetcher.formData?.get("intent") === "clear-submissions"}
+                        >
+                          Clear Log
+                        </Button>
+                      </fetcher.Form>
+                    )}
+                  </InlineStack>
+                  <Collapsible open={showLogs} id="submission-logs">
                     <BlockStack gap="400">
-                      <Card padding="0">
-                        {submissionRows.length > 0 ? (
-                          <DataTable
-                            columnContentTypes={["text", "text", "text", "text", "text"]}
-                            headings={["URL", "Status", "Engine", "Source", "Submitted"]}
-                            rows={submissionRows}
-                            hoverable
-                          />
-                        ) : (
-                          <Box padding="800">
-                            <EmptyState
-                              heading="No submissions yet"
-                              image=""
-                            >
-                              <Text as="p" tone="subdued">
-                                Submit your first URL from the Submit tab to see it here.
-                              </Text>
-                            </EmptyState>
-                          </Box>
-                        )}
-                      </Card>
-
+                      {submissionRows.length > 0 ? (
+                        <DataTable
+                          columnContentTypes={["text", "text", "text", "text", "text"]}
+                          headings={["URL", "Response", "Engine", "Source", "Submitted"]}
+                          rows={submissionRows}
+                          hoverable
+                        />
+                      ) : (
+                        <Box padding="400">
+                          <Text as="p" tone="subdued">
+                            No submissions yet. Submit a URL above to see the log here.
+                          </Text>
+                        </Box>
+                      )}
                       {totalPages > 1 && (
                         <InlineStack align="center">
                           <Pagination
                             hasPrevious={page > 1}
                             hasNext={page < totalPages}
-                            onPrevious={() => setSearchParams({ tab: "log", page: String(page - 1) })}
-                            onNext={() => setSearchParams({ tab: "log", page: String(page + 1) })}
+                            onPrevious={() => setSearchParams({ page: String(page - 1) })}
+                            onNext={() => setSearchParams({ page: String(page + 1) })}
                             label={`Page ${page} of ${totalPages}`}
                           />
                         </InlineStack>
                       )}
                     </BlockStack>
-                  )}
-
-                  {/* ——— Index Status Tab ——— */}
-                  {selectedTab === 2 && (
-                    <BlockStack gap="400">
-                      {!hasGa4 && summary.total > 0 && (
-                        <Banner tone="info">
-                          <Text as="p" variant="bodyMd">
-                            Connect Google in Settings to see how many sessions each indexed page is getting.
-                          </Text>
-                        </Banner>
-                      )}
-                      {/* Summary Stats */}
-                      <InlineGrid columns={{ xs: 1, sm: 3 }} gap="400">
-                        <Card>
-                          <BlockStack gap="200">
-                            <Text as="p" variant="bodySm" tone="subdued">Total URLs</Text>
-                            <Text as="p" variant="heading2xl">{summary.total}</Text>
-                          </BlockStack>
-                        </Card>
-                        <Card>
-                          <BlockStack gap="200">
-                            <Text as="p" variant="bodySm" tone="subdued">Bing Indexed</Text>
-                            <InlineStack gap="200" blockAlign="end">
-                              <Text as="p" variant="heading2xl">{summary.bingIndexed}</Text>
-                              <Text as="p" variant="bodySm" tone="subdued">{bingPct}%</Text>
-                            </InlineStack>
-                            <ProgressBar progress={bingPct} size="small" tone="primary" />
-                          </BlockStack>
-                        </Card>
-                        <Card>
-                          <BlockStack gap="200">
-                            <Text as="p" variant="bodySm" tone="subdued">Google Indexed</Text>
-                            <InlineStack gap="200" blockAlign="end">
-                              <Text as="p" variant="heading2xl">{summary.googleIndexed}</Text>
-                              <Text as="p" variant="bodySm" tone="subdued">{googlePct}%</Text>
-                            </InlineStack>
-                            <ProgressBar progress={googlePct} size="small" tone="primary" />
-                          </BlockStack>
-                        </Card>
-                      </InlineGrid>
-
-                      {/* Table + Re-check button */}
-                      <Card padding="0">
-                        <Box padding="400" paddingBlockEnd="0">
-                          <InlineStack align="space-between" blockAlign="center">
-                            <Text as="h2" variant="headingMd">URL Index Status</Text>
-                            <fetcher.Form method="post">
-                              <input type="hidden" name="intent" value="recheck-all" />
-                              <Button
-                                submit
-                                loading={isSubmitting && fetcher.formData?.get("intent") === "recheck-all"}
-                              >
-                                Re-check All
-                              </Button>
-                            </fetcher.Form>
-                          </InlineStack>
-                        </Box>
-                        {statusRows.length > 0 ? (
-                          <DataTable
-                            columnContentTypes={["text", "text", "text", "numeric", "text"]}
-                            headings={["URL", "Bing", "Google", "Sessions (30d)", "Last Checked"]}
-                            rows={statusRows}
-                            hoverable
-                          />
-                        ) : (
-                          <Box padding="800">
-                            <EmptyState
-                              heading="No URLs monitored yet"
-                              image=""
-                            >
-                              <Text as="p" tone="subdued">
-                                Submit URLs first, then their index status will be tracked here after the daily check runs.
-                              </Text>
-                            </EmptyState>
-                          </Box>
-                        )}
-                      </Card>
-                    </BlockStack>
-                  )}
-                </Box>
-              </Tabs>
+                  </Collapsible>
+                </BlockStack>
+              </Card>
             </BlockStack>
           </PolarisProvider>
         )}

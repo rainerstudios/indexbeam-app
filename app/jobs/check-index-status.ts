@@ -1,7 +1,9 @@
 import type { Job } from "bullmq";
 import { getUrlInfo } from "../services/bing-webmaster.server";
+import type { BingAuth } from "../services/bing-webmaster.server";
 import { inspectUrl } from "../services/gsc.server";
 import { getGoogleAccessToken } from "../lib/google-oauth.server";
+import { getBingAccessToken } from "../lib/bing-oauth.server";
 import { decrypt } from "../lib/encryption.server";
 import { waitForToken } from "../lib/rate-limiter.server";
 import prisma from "../db.server";
@@ -25,11 +27,19 @@ export async function processIndexCheckJob(job: Job<IndexCheckJobData>) {
   for (const { url } of submittedUrls) {
     const updateData: any = { lastCheckedAt: new Date() };
 
-    if (store.bingWebmasterApiKey) {
+    // Prefer Bing OAuth, fall back to API key
+    const bingOAuthToken = await getBingAccessToken(store.id);
+    const bingAuth: BingAuth | null = bingOAuthToken
+      ? { oauthToken: bingOAuthToken }
+      : store.bingWebmasterApiKey
+        ? { apiKey: decrypt(store.bingWebmasterApiKey) }
+        : null;
+
+    if (bingAuth) {
       try {
         await waitForToken("bing_webmaster");
         const bingResult = await getUrlInfo(
-          decrypt(store.bingWebmasterApiKey),
+          bingAuth,
           `https://${store.shopDomain}`,
           url
         );

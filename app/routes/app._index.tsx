@@ -1,5 +1,5 @@
-import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useNavigate } from "react-router";
+import type { HeadersFunction, LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { useLoaderData, useNavigate, useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
@@ -28,9 +28,27 @@ import {
   SearchIcon,
   ViewIcon,
   SettingsIcon,
-  CheckCircleIcon,
-  AlertCircleIcon,
+  SendIcon,
+  CheckIcon,
+  ChartVerticalIcon,
+  HashtagIcon,
 } from "@shopify/polaris-icons";
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { session } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+
+  if (intent === "dismiss-onboarding") {
+    await prisma.store.update({
+      where: { shopDomain: session.shop },
+      data: { onboardingDismissed: true },
+    });
+    return { ok: true };
+  }
+
+  return { ok: true };
+};
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -57,12 +75,67 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         firstSubmit: false,
         gscConnected: false,
         keywordsAdded: false,
+        bingConnected: false,
       },
       schemaAuditCount: 0,
       dailySubmissions: [],
       engines: { hasBing: false, hasYandex: false, hasGa4: false },
+      bingKeywords: [] as { query: string; clicks: number; impressions: number; avgPosition: number }[],
+      crawlIssueCount: 0,
+      showOnboarding: false,
+      autoIndexBanner: null as { count: number; latestUrl: string } | null,
     };
   }
+
+  // Copy merchant email from session if not yet stored
+  if (!store.merchantEmail) {
+    const offlineSession = await prisma.session.findFirst({
+      where: { shop: session.shop, email: { not: null } },
+      select: { email: true },
+    });
+    if (offlineSession?.email) {
+      await prisma.store.update({
+        where: { id: store.id },
+        data: { merchantEmail: offlineSession.email },
+      });
+    }
+  }
+
+  // Check for auto-indexed URLs since last dashboard visit
+  const recentWebhookSubmissions = await prisma.urlSubmission.findMany({
+    where: {
+      storeId: store.id,
+      source: "webhook",
+      ...(store.lastDashboardVisit
+        ? { submittedAt: { gt: store.lastDashboardVisit } }
+        : { submittedAt: { gt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }),
+    },
+    orderBy: { submittedAt: "desc" },
+    take: 1,
+    select: { url: true },
+  });
+  const autoIndexCount = await prisma.urlSubmission.count({
+    where: {
+      storeId: store.id,
+      source: "webhook",
+      ...(store.lastDashboardVisit
+        ? { submittedAt: { gt: store.lastDashboardVisit } }
+        : { submittedAt: { gt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }),
+    },
+  });
+  const autoIndexBanner = autoIndexCount > 0 && recentWebhookSubmissions[0]
+    ? { count: autoIndexCount, latestUrl: recentWebhookSubmissions[0].url }
+    : null;
+
+  // Update last dashboard visit
+  await prisma.store.update({
+    where: { id: store.id },
+    data: { lastDashboardVisit: new Date() },
+  });
+
+  // Show onboarding if installed within 7 days and not dismissed
+  const daysSinceInstall = (Date.now() - store.installedAt.getTime()) / (1000 * 60 * 60 * 24);
+  const showOnboarding = !store.onboardingDismissed && daysSinceInstall <= 7;
 
   const [
     totalSubmissions,
@@ -120,7 +193,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     sparkline.push(match ? Number(match.count) : 0);
   }
 
-  const hasBing = !!store.bingWebmasterApiKey;
+  const hasBing = !!store.bingWebmasterApiKey || !!store.bingRefreshToken;
   const hasYandex = !!store.yandexWebmasterToken;
   const hasGa4 = !!store.ga4PropertyId && (!!store.ga4Credentials || !!store.googleRefreshToken);
 
@@ -128,19 +201,51 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   let yandexClicks = 0;
   let ga4Organic = 0;
   let aiTraffic = { totalAISessions: 0, totalAIUsers: 0, aiShareOfTotal: 0, sources: [] as { source: string; sessions: number }[] };
+  let bingKeywords: { query: string; clicks: number; impressions: number; avgPosition: number }[] = [];
+  let crawlIssueCount = 0;
 
   const { decrypt } = await import("../lib/encryption.server");
 
   if (hasBing) {
     try {
-      const { getSearchTraffic } = await import(
-        "../services/bing-webmaster.server"
-      );
-      const traffic = await getSearchTraffic(
-        decrypt(store.bingWebmasterApiKey!),
-        `https://${store.shopDomain}`
-      );
-      bingClicks = traffic.reduce((s, t) => s + t.clicks, 0);
+      const { getBingAccessToken } = await import("../lib/bing-oauth.server");
+      const { getSearchTraffic, getQueryStats, getCrawlIssues, addSite, submitFeed } = await import("../services/bing-webmaster.server");
+      const bingOAuthToken = await getBingAccessToken(store.id);
+      const bingAuth = bingOAuthToken
+        ? { oauthToken: bingOAuthToken }
+        : store.bingWebmasterApiKey
+          ? { apiKey: decrypt(store.bingWebmasterApiKey!) }
+          : null;
+      if (bingAuth) {
+        const siteUrl = `https://${store.shopDomain}`;
+        const [traffic, keywords, issues] = await Promise.all([
+          getSearchTraffic(bingAuth, siteUrl),
+          getQueryStats(bingAuth, siteUrl).catch(() => []),
+          getCrawlIssues(bingAuth, siteUrl).catch(() => []),
+        ]);
+        bingClicks = traffic.reduce((s, t) => s + t.clicks, 0);
+        bingKeywords = keywords.slice(0, 10).map((k) => ({
+          query: k.query,
+          clicks: k.clicks,
+          impressions: k.impressions,
+          avgPosition: k.avgPosition,
+        }));
+        crawlIssueCount = issues.length;
+
+        // Auto-onboarding: register site + submit sitemap on first OAuth load
+        if (bingOAuthToken && !store.bingAutoSetup) {
+          try {
+            await addSite(bingAuth, siteUrl);
+          } catch {}
+          try {
+            await submitFeed(bingAuth, siteUrl, `${siteUrl}/sitemap.xml`);
+          } catch {}
+          await prisma.store.update({
+            where: { id: store.id },
+            data: { bingAutoSetup: true },
+          });
+        }
+      }
     } catch {}
   }
 
@@ -216,17 +321,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       firstSubmit: totalSubmissions > 0,
       gscConnected: !!store.gscCredentials || !!store.googleRefreshToken,
       keywordsAdded: trackedKeywords > 0,
+      bingConnected: !!store.bingRefreshToken,
     },
     schemaAuditCount,
     dailySubmissions: sparkline,
     engines: { hasBing, hasYandex, hasGa4 },
+    bingKeywords,
+    crawlIssueCount,
+    showOnboarding,
+    autoIndexBanner,
   };
 };
 
 export default function Dashboard() {
-  const { stats, traffic, aiTraffic, recentActivity, setupSteps, dailySubmissions, engines, schemaAuditCount } =
+  const { stats, traffic, aiTraffic, recentActivity, setupSteps, dailySubmissions, engines, schemaAuditCount, bingKeywords, crawlIssueCount, showOnboarding, autoIndexBanner } =
     useLoaderData<typeof loader>();
   const navigate = useNavigate();
+  const fetcher = useFetcher();
 
   const totalTraffic = traffic.bingClicks + traffic.yandexClicks + traffic.ga4Organic;
 
@@ -264,7 +375,7 @@ export default function Dashboard() {
       complete: schemaAuditCount > 0,
       primaryButton: {
         content: "Audit Pages",
-        props: { onClick: () => navigate("/app/visibility?tab=schema") },
+        props: { onClick: () => navigate("/app/seo") },
       },
     },
     {
@@ -275,6 +386,16 @@ export default function Dashboard() {
       primaryButton: {
         content: "Track Keywords",
         props: { onClick: () => navigate("/app/visibility") },
+      },
+    },
+    {
+      id: 5,
+      title: "Connect Bing Webmaster",
+      description: "Verify your IndexNow submissions are indexed and track Bing/Copilot traffic.",
+      complete: setupSteps.bingConnected,
+      primaryButton: {
+        content: "Connect Bing",
+        props: { onClick: () => navigate("/app/settings?tab=connections") },
       },
     },
   ];
@@ -314,6 +435,49 @@ export default function Dashboard() {
         {() => (
           <PolarisProvider>
             <BlockStack gap="500">
+              {/* Onboarding Welcome Card */}
+              {showOnboarding && (
+                <Banner
+                  title="Welcome to IndexBeam!"
+                  tone="info"
+                  onDismiss={() => {
+                    fetcher.submit(
+                      { intent: "dismiss-onboarding" },
+                      { method: "post" }
+                    );
+                  }}
+                >
+                  <BlockStack gap="300">
+                    <Text as="p" variant="bodyMd">
+                      Get started in 3 steps to maximize your search visibility:
+                    </Text>
+                    <ButtonGroup>
+                      <Button onClick={() => navigate("/app/settings")}>
+                        1. Generate IndexNow Key
+                      </Button>
+                      <Button onClick={() => navigate("/app/indexing")}>
+                        2. Submit Your First URL
+                      </Button>
+                      <Button onClick={() => navigate("/app/visibility")}>
+                        3. Check AI Visibility
+                      </Button>
+                    </ButtonGroup>
+                  </BlockStack>
+                </Banner>
+              )}
+
+              {/* Auto-Index Notification Banner */}
+              {autoIndexBanner && (
+                <Banner
+                  title={`IndexBeam auto-submitted ${autoIndexBanner.count} product URL${autoIndexBanner.count !== 1 ? "s" : ""} since your last visit`}
+                  tone="success"
+                >
+                  <Text as="p" variant="bodyMd">
+                    Latest: {autoIndexBanner.latestUrl}
+                  </Text>
+                </Banner>
+              )}
+
               {/* Setup Guide - only show if not all complete */}
               {!allSetupComplete && (
                 <SetupGuide
@@ -324,7 +488,7 @@ export default function Dashboard() {
               )}
 
               {/* Connection status banner */}
-              {connectedEngines === 0 && allSetupComplete && (
+              {connectedEngines === 0 && setupSteps.firstSubmit && (
                 <Banner
                   title="Connect your search engines"
                   tone="warning"
@@ -342,21 +506,29 @@ export default function Dashboard() {
                   title="URLs Submitted"
                   value={stats.totalSubmissions}
                   data={dailySubmissions}
+                  icon={SendIcon}
+                  iconBg="#e0f0ff"
                 />
                 <StatBox
                   title="Success Rate"
                   value={`${stats.successRate}%`}
                   data={[]}
+                  icon={CheckIcon}
+                  iconBg="#e8f5e9"
                 />
                 <StatBox
                   title="Indexing Health"
                   value={`${stats.indexingHealth}%`}
                   data={[]}
+                  icon={ChartVerticalIcon}
+                  iconBg="#fff3e0"
                 />
                 <StatBox
                   title="Keywords Tracked"
                   value={stats.trackedKeywords}
                   data={[]}
+                  icon={HashtagIcon}
+                  iconBg="#f3e8ff"
                 />
               </InlineGrid>
 
@@ -453,7 +625,7 @@ export default function Dashboard() {
                         fullWidth
                         onClick={() => navigate("/app/visibility")}
                       >
-                        AI Visibility & Schema Audit
+                        Check AI Visibility
                       </Button>
                       <Button
                         icon={SettingsIcon}
@@ -566,6 +738,48 @@ export default function Dashboard() {
                 </BlockStack>
               </Card>
 
+              {/* Crawl Issues Banner */}
+              {crawlIssueCount > 0 && (
+                <Banner
+                  title={`${crawlIssueCount} Bing crawl issue${crawlIssueCount !== 1 ? "s" : ""} found`}
+                  tone="warning"
+                >
+                  <Text as="p" variant="bodyMd">
+                    Bing Webmaster has detected crawl issues on your site that may affect indexing.
+                  </Text>
+                </Banner>
+              )}
+
+              {/* Top Bing Keywords */}
+              {bingKeywords.length > 0 && (
+                <Card>
+                  <BlockStack gap="400">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Text as="h2" variant="headingMd">
+                        Top Bing Keywords
+                      </Text>
+                      <Badge tone="info">Bing Webmaster</Badge>
+                    </InlineStack>
+                    <BlockStack gap="200">
+                      {bingKeywords.map((kw) => (
+                        <InlineStack key={kw.query} align="space-between" blockAlign="center">
+                          <Text as="span" variant="bodyMd">{kw.query}</Text>
+                          <InlineStack gap="300">
+                            <Text as="span" variant="bodySm" tone="subdued">
+                              {kw.clicks} clicks
+                            </Text>
+                            <Text as="span" variant="bodySm" tone="subdued">
+                              {kw.impressions.toLocaleString()} impr
+                            </Text>
+                            <Badge size="small">Pos {kw.avgPosition.toFixed(1)}</Badge>
+                          </InlineStack>
+                        </InlineStack>
+                      ))}
+                    </BlockStack>
+                  </BlockStack>
+                </Card>
+              )}
+
               {/* Recent Activity */}
               <Card>
                 <BlockStack gap="400">
@@ -584,7 +798,7 @@ export default function Dashboard() {
                     <Box paddingBlock="800">
                       <EmptyState
                         heading="No activity yet"
-                        image=""
+                        image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
                       >
                         <Text as="p" tone="subdued">
                           Submit some URLs to see your activity feed here. IndexBeam tracks every submission, index check, and visibility scan.

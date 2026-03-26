@@ -4,8 +4,9 @@ import {
   detectCompetitorMentions,
 } from "./bing-search.server";
 import { decrypt } from "../lib/encryption.server";
-import { waitForToken } from "../lib/rate-limiter.server";
 import prisma from "../db.server";
+
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function runVisibilityScan(storeId: string): Promise<void> {
   const store = await prisma.store.findUnique({
@@ -18,7 +19,7 @@ export async function runVisibilityScan(storeId: string): Promise<void> {
     return;
   }
 
-  // Use merchant's key if set, otherwise fall back to app's own key
+  // Use merchant's Bing key if set, otherwise searchWeb() falls back to SearXNG
   const apiKey = store.bingSearchApiKey ? decrypt(store.bingSearchApiKey) : null;
   const queries = await prisma.visibilityQuery.findMany({
     where: { storeId },
@@ -27,7 +28,8 @@ export async function runVisibilityScan(storeId: string): Promise<void> {
 
   for (const query of queries) {
     try {
-      await waitForToken("bing_search");
+      // Simple delay between queries to avoid rate limiting
+      await delay(500);
 
       const results = await searchWeb(apiKey, query.keyword, 10);
       const brandAnalysis = detectBrandMentions(results, store.shopDomain);
@@ -49,7 +51,7 @@ export async function runVisibilityScan(storeId: string): Promise<void> {
             mentionsBrand: isBrand,
             mentionsCompetitor: isCompetitor,
             snippet: result.snippet.substring(0, 500),
-            source: "bing",
+            source: "web",
           },
         });
       }

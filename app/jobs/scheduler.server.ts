@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import { indexCheckQueue, visibilityScanQueue } from "./queue.server";
+import { indexCheckQueue, visibilityScanQueue, weeklyDigestQueue } from "./queue.server";
 import prisma from "../db.server";
 
 export function startScheduler() {
@@ -36,6 +36,26 @@ export function startScheduler() {
     }
     console.log(
       `[Scheduler] Enqueued visibility scans for ${stores.length} stores`
+    );
+  });
+
+  // Weekly on Monday at 9 AM UTC: send email digests
+  cron.schedule("0 9 * * 1", async () => {
+    console.log("[Scheduler] Sending weekly email digests...");
+    const stores = await prisma.store.findMany({
+      where: {
+        uninstalledAt: null,
+        emailDigestEnabled: true,
+        merchantEmail: { not: null },
+      },
+    });
+
+    for (const store of stores) {
+      const jobId = `weekly-digest-${store.id}-${new Date().toISOString().split("T")[0]}`;
+      await weeklyDigestQueue.add("digest", { storeId: store.id }, { jobId });
+    }
+    console.log(
+      `[Scheduler] Enqueued weekly digests for ${stores.length} stores`
     );
   });
 

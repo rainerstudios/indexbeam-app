@@ -7,6 +7,7 @@ export const PLAN_LIMITS = {
     competitors: 1,
     indexChecksPerDay: 10,
     scansPerDay: 1,
+    aiMentionChecksPerMonth: 5,
   },
   starter: {
     submissionsPerMonth: 500,
@@ -14,6 +15,7 @@ export const PLAN_LIMITS = {
     competitors: 3,
     indexChecksPerDay: 100,
     scansPerDay: 2,
+    aiMentionChecksPerMonth: 50,
   },
   growth: {
     submissionsPerMonth: 2000,
@@ -21,6 +23,7 @@ export const PLAN_LIMITS = {
     competitors: 10,
     indexChecksPerDay: 500,
     scansPerDay: 4,
+    aiMentionChecksPerMonth: 200,
   },
   pro: {
     submissionsPerMonth: Infinity,
@@ -28,6 +31,7 @@ export const PLAN_LIMITS = {
     competitors: 25,
     indexChecksPerDay: 2000,
     scansPerDay: 12,
+    aiMentionChecksPerMonth: 1000,
   },
 } as const;
 
@@ -64,6 +68,26 @@ export async function checkKeywordLimit(
   const limits = getPlanLimits(plan);
   const current = await prisma.visibilityQuery.count({ where: { storeId } });
   return { allowed: current < limits.keywords, current, max: limits.keywords };
+}
+
+export async function checkAIMentionLimit(
+  storeId: string,
+  plan: string,
+): Promise<{ allowed: boolean; current: number; max: number }> {
+  const limits = getPlanLimits(plan);
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+
+  const current = await prisma.aIMentionResult.count({
+    where: { storeId, checkedAt: { gte: startOfMonth } },
+  });
+
+  return {
+    allowed: current < limits.aiMentionChecksPerMonth,
+    current,
+    max: limits.aiMentionChecksPerMonth,
+  };
 }
 
 export async function checkCompetitorLimit(

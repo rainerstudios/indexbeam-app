@@ -1,15 +1,18 @@
-import { Card, Text, Box } from "@shopify/polaris";
+import { Card, Text, Box, Icon } from "@shopify/polaris";
 import { ArrowUpIcon, ArrowDownIcon } from "@shopify/polaris-icons";
 import { SparkLineChart } from "@shopify/polaris-viz";
 import "@shopify/polaris-viz/build/esm/styles.css";
+import type { IconSource } from "@shopify/polaris";
 
 interface StatBoxProps {
   title: string;
   value: string | number;
   data?: number[];
+  icon?: IconSource;
+  iconBg?: string;
 }
 
-export function StatBox({ title, value, data = [] }: StatBoxProps) {
+export function StatBox({ title, value, data = [], icon, iconBg }: StatBoxProps) {
   const hasData = data && data.length;
   const percentageChange = hasData
     ? getPercentageChange(Number(data[0]), Number(data.at(-1)))
@@ -41,8 +44,27 @@ export function StatBox({ title, value, data = [] }: StatBoxProps) {
                 top: -8,
                 left: -2,
                 zIndex: 20,
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
               }}
             >
+              {icon && (
+                <div
+                  style={{
+                    background: iconBg || "#e0f0ff",
+                    borderRadius: "6px",
+                    width: "24px",
+                    height: "24px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                  }}
+                >
+                  <Icon source={icon} />
+                </div>
+              )}
               <Text as="p" variant="headingSm">
                 {title}
               </Text>
