@@ -262,10 +262,11 @@ const plans = [
   },
   {
     name: "Starter",
-    price: "$19",
+    price: "$9",
     description: "For growing stores that need reliable indexing",
     features: [
-      "500 URL submissions/month",
+      "1,000 URL submissions/month",
+      "Auto-indexing on publish",
       "Bing index monitoring",
       "Basic AI visibility tracking",
       "10 keyword tracking slots",
@@ -275,11 +276,11 @@ const plans = [
   },
   {
     name: "Growth",
-    price: "$49",
+    price: "$29",
     description: "Full visibility intelligence for scaling stores",
     featured: true,
     features: [
-      "2,000 URL submissions/month",
+      "10,000 URL submissions/month",
       "Google + Bing index tracking",
       "AI citation tracking",
       "50 keyword tracking slots",
@@ -290,7 +291,7 @@ const plans = [
   },
   {
     name: "Pro",
-    price: "$99",
+    price: "$49",
     description: "Maximum power for high-traffic stores",
     features: [
       "Unlimited URL submissions",

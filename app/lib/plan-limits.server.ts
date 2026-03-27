@@ -10,7 +10,7 @@ export const PLAN_LIMITS = {
     aiMentionChecksPerMonth: 5,
   },
   starter: {
-    submissionsPerMonth: 500,
+    submissionsPerMonth: 1000,
     keywords: 10,
     competitors: 3,
     indexChecksPerDay: 100,
@@ -18,7 +18,7 @@ export const PLAN_LIMITS = {
     aiMentionChecksPerMonth: 50,
   },
   growth: {
-    submissionsPerMonth: 2000,
+    submissionsPerMonth: 10000,
     keywords: 50,
     competitors: 10,
     indexChecksPerDay: 500,
