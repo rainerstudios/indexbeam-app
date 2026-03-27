@@ -281,7 +281,7 @@ const plans = [
     featured: true,
     features: [
       "10,000 URL submissions/month",
-      "Google + Bing index tracking",
+      "Bing + Yandex index tracking",
       "AI citation tracking",
       "50 keyword tracking slots",
       "10 competitors",
