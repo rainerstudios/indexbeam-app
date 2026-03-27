@@ -31,6 +31,11 @@ api_version = "2026-04"
   topics = [ "app_subscriptions/update" ]
   uri = "/webhooks/app/subscriptions-update"
 
+[webhooks.privacy_compliance]
+customer_deletion_url = "https://indexbeam-ai.fly.dev/webhooks/privacy/customer-deletion"
+customer_data_request_url = "https://indexbeam-ai.fly.dev/webhooks/privacy/customer-data-request"
+shop_deletion_url = "https://indexbeam-ai.fly.dev/webhooks/privacy/shop-deletion"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_products"

@@ -193,9 +193,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     sparkline.push(match ? Number(match.count) : 0);
   }
 
-  const hasBing = !!store.bingWebmasterApiKey || !!store.bingRefreshToken;
-  const hasYandex = !!store.yandexWebmasterToken;
-  const hasGa4 = !!store.ga4PropertyId && (!!store.ga4Credentials || !!store.googleRefreshToken);
+  const isDemo = process.env.DEMO_MODE === "true";
+  const hasBing = isDemo || !!store.bingWebmasterApiKey || !!store.bingRefreshToken;
+  const hasYandex = isDemo || !!store.yandexWebmasterToken;
+  const hasGa4 = isDemo || (!!store.ga4PropertyId && (!!store.ga4Credentials || !!store.googleRefreshToken));
 
   let bingClicks = 0;
   let yandexClicks = 0;
@@ -203,6 +204,35 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   let aiTraffic = { totalAISessions: 0, totalAIUsers: 0, aiShareOfTotal: 0, sources: [] as { source: string; sessions: number }[] };
   let bingKeywords: { query: string; clicks: number; impressions: number; avgPosition: number }[] = [];
   let crawlIssueCount = 0;
+
+  // Demo mode: show realistic traffic data for screenshots
+  if (process.env.DEMO_MODE === "true") {
+    bingClicks = 1247;
+    yandexClicks = 183;
+    ga4Organic = 3891;
+    aiTraffic = {
+      totalAISessions: 342,
+      totalAIUsers: 289,
+      aiShareOfTotal: 8.7,
+      sources: [
+        { source: "chatgpt.com", sessions: 156 },
+        { source: "perplexity.ai", sessions: 98 },
+        { source: "copilot.microsoft.com", sessions: 52 },
+        { source: "gemini.google.com", sessions: 36 },
+      ],
+    };
+    bingKeywords = [
+      { query: "premium wireless headphones", clicks: 312, impressions: 4820, avgPosition: 3.2 },
+      { query: "organic cotton t-shirt", clicks: 245, impressions: 3150, avgPosition: 4.1 },
+      { query: "eco-friendly water bottle", clicks: 189, impressions: 2890, avgPosition: 2.8 },
+      { query: "leather crossbody bag", clicks: 156, impressions: 2340, avgPosition: 5.4 },
+      { query: "natural soy candles", clicks: 134, impressions: 1980, avgPosition: 3.7 },
+      { query: "smart fitness tracker", clicks: 98, impressions: 1650, avgPosition: 6.2 },
+      { query: "bamboo cutting board", clicks: 67, impressions: 1120, avgPosition: 4.5 },
+      { query: "merino wool sweater", clicks: 46, impressions: 890, avgPosition: 7.1 },
+    ];
+    crawlIssueCount = 2;
+  }
 
   const { decrypt } = await import("../lib/encryption.server");
 
