@@ -2,7 +2,7 @@
 
 client_id = "1df069658529e7a37488f3ce1bbdebfc"
 name = "indexbeam-ai"
-application_url = "https://indexbeam-ai.fly.dev"
+application_url = "https://app.indexbeam.app"
 embedded = true
 
 [build]
@@ -32,18 +32,18 @@ api_version = "2026-04"
   uri = "/webhooks/app/subscriptions-update"
 
 [webhooks.privacy_compliance]
-customer_deletion_url = "https://indexbeam-ai.fly.dev/webhooks/privacy/customer-deletion"
-customer_data_request_url = "https://indexbeam-ai.fly.dev/webhooks/privacy/customer-data-request"
-shop_deletion_url = "https://indexbeam-ai.fly.dev/webhooks/privacy/shop-deletion"
+customer_deletion_url = "https://app.indexbeam.app/webhooks/privacy/customer-deletion"
+customer_data_request_url = "https://app.indexbeam.app/webhooks/privacy/customer-data-request"
+shop_deletion_url = "https://app.indexbeam.app/webhooks/privacy/shop-deletion"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_products"
 
 [auth]
-redirect_urls = [ "https://indexbeam-ai.fly.dev/api/auth" ]
+redirect_urls = [ "https://app.indexbeam.app/api/auth" ]
 
 [app_proxy]
-url = "https://indexbeam-ai.fly.dev/api/proxy"
+url = "https://app.indexbeam.app/api/proxy"
 subpath = "indexnow"
 prefix = "apps"
