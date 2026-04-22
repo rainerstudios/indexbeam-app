@@ -13,11 +13,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     await db.session.deleteMany({ where: { shop } });
   }
 
-  // Mark store as uninstalled
+  // Mark store as uninstalled and reset plan so billing is re-requested on reinstall
   await db.store
     .update({
       where: { shopDomain: shop },
-      data: { uninstalledAt: new Date() },
+      data: { uninstalledAt: new Date(), plan: "free" },
     })
     .catch(() => {
       // Store may not exist yet if auth never completed

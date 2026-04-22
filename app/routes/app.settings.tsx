@@ -84,6 +84,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       await billing.request({ plan });
     }
     if (plan === "free") {
+      // Cancel active Shopify subscription before downgrading
+      try {
+        const { hasActivePayment, appSubscriptions } = await billing.check({ plans: [], isTest: process.env.NODE_ENV !== "production" });
+        if (hasActivePayment && appSubscriptions.length > 0) {
+          await billing.cancel({ subscriptionId: appSubscriptions[0].id, isTest: process.env.NODE_ENV !== "production", prorate: true });
+        }
+      } catch {
+        // Subscription may already be cancelled
+      }
       await prisma.store.update({
         where: { id: store.id },
         data: { plan: "free" },
