@@ -185,6 +185,20 @@ model AIMentionResult {
   @@index([storeId, keyword])
 }
 
+model AIScore {
+  id             String   @id @default(cuid())
+  storeId        String   @unique
+  store          Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  overallScore   Int
+  grade          String
+  afdocsResults  String   @default("[]")
+  shopifyChecks  String   @default("[]")
+  categoryScores String   @default("{}")
+  diagnostics    String   @default("[]")
+  resolutions    String   @default("{}")
+  scannedAt      DateTime @default(now())
+}
+
 model BillingEvent {
   id              String   @id @default(cuid())
   storeId         String
