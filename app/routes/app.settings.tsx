@@ -67,7 +67,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { billing, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
 
@@ -79,27 +79,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { encrypt } = await import("../lib/encryption.server");
 
   if (intent === "change-plan") {
-    const plan = formData.get("plan") as string;
-    if (plan && plan !== "free") {
-      await billing.request({ plan });
-    }
-    if (plan === "free") {
-      // Cancel active Shopify subscription before downgrading
-      try {
-        const { hasActivePayment, appSubscriptions } = await billing.check({ plans: [], isTest: process.env.NODE_ENV !== "production" });
-        if (hasActivePayment && appSubscriptions.length > 0) {
-          await billing.cancel({ subscriptionId: appSubscriptions[0].id, isTest: process.env.NODE_ENV !== "production", prorate: true });
-        }
-      } catch {
-        // Subscription may already be cancelled
-      }
-      await prisma.store.update({
-        where: { id: store.id },
-        data: { plan: "free" },
-      });
-      return { success: true, message: "Downgraded to Free plan." };
-    }
-    return null;
+    // This app uses Managed Pricing — plan changes are handled by Shopify.
+    // The app_subscriptions/update webhook keeps the DB in sync automatically.
+    return { managedPricing: true };
   }
 
   if (intent === "save-bing-webmaster") {
@@ -899,12 +881,9 @@ export default function SettingsPage() {
                               content: plan.key === "free" ? "Downgrade" : "Upgrade",
                               props: {
                                 variant: "primary" as const,
-                                loading: isSubmitting,
                                 onClick: () => {
-                                  const fd = new FormData();
-                                  fd.set("intent", "change-plan");
-                                  fd.set("plan", plan.key);
-                                  fetcher.submit(fd, { method: "post" });
+                                  // Managed Pricing — direct merchant to App Store listing
+                                  window.open("https://apps.shopify.com/indexbeam-ai", "_top");
                                 },
                               },
                             }
