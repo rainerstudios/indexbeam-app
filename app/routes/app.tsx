@@ -108,8 +108,8 @@ function WelcomeContent({ onStart }: { onStart: () => void }) {
     {
       icon: (
         <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
-          <circle cx="10" cy="10" r="6.5" stroke="#F51015" strokeWidth="1.8" />
-          <path d="M15 15L19 19" stroke="#F51015" strokeWidth="1.8" strokeLinecap="round" />
+          <circle cx="10" cy="10" r="6.5" stroke="#4CAF50" strokeWidth="1.8" />
+          <path d="M15 15L19 19" stroke="#4CAF50" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       ),
       title: "Instant Google & Bing indexing",
@@ -118,8 +118,8 @@ function WelcomeContent({ onStart }: { onStart: () => void }) {
     {
       icon: (
         <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
-          <path d="M11 3C8.2 3 6 5.2 6 8v4.5L4.5 15h13L16 12.5V8c0-2.8-2.2-5-5-5z" stroke="#F51015" strokeWidth="1.8" strokeLinejoin="round" />
-          <path d="M9 17a2 2 0 004 0" stroke="#F51015" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M11 3C8.2 3 6 5.2 6 8v4.5L4.5 15h13L16 12.5V8c0-2.8-2.2-5-5-5z" stroke="#4CAF50" strokeWidth="1.8" strokeLinejoin="round" />
+          <path d="M9 17a2 2 0 004 0" stroke="#4CAF50" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
       ),
       title: "Indexing status tracking",
@@ -128,8 +128,8 @@ function WelcomeContent({ onStart }: { onStart: () => void }) {
     {
       icon: (
         <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
-          <path d="M3 16l5-5.5 4 4 5-7 3 3" stroke="#F51015" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M3 19h16" stroke="#F51015" strokeWidth="1.5" strokeLinecap="round" />
+          <path d="M3 16l5-5.5 4 4 5-7 3 3" stroke="#4CAF50" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M3 19h16" stroke="#4CAF50" strokeWidth="1.5" strokeLinecap="round" />
         </svg>
       ),
       title: "AI SEO & visibility scores",
@@ -140,7 +140,7 @@ function WelcomeContent({ onStart }: { onStart: () => void }) {
   return (
     <div style={{ maxWidth: "400px", width: "100%" }}>
       <div style={{ marginBottom: "32px", textAlign: "center" }}>
-        <img src="/logo.svg" alt="IndexBeam" style={{ height: "38px", display: "inline-block" }} />
+        <img src="/logo.png" alt="IndexBeam" style={{ height: "38px", display: "inline-block", background: "#1B5E20", borderRadius: "10px", padding: "6px 14px" }} />
       </div>
 
       <h1 style={{
@@ -181,7 +181,7 @@ function WelcomeContent({ onStart }: { onStart: () => void }) {
               height: 38,
               borderRadius: "8px",
               flexShrink: 0,
-              background: "#FDDEDE",
+              background: "#E8F5E9",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -203,12 +203,12 @@ function WelcomeContent({ onStart }: { onStart: () => void }) {
           padding: "15px 0",
           borderRadius: "10px",
           border: "none",
-          background: "linear-gradient(135deg, #F51015, #F51015)",
+          background: "linear-gradient(135deg, #4CAF50, #4CAF50)",
           color: "white",
           fontSize: "15px",
           fontWeight: "700",
           cursor: "pointer",
-          boxShadow: "0 4px 16px rgba(192,57,43,0.4)",
+          boxShadow: "0 4px 16px rgba(76,175,80,0.4)",
         }}
       >
         Start My 14-Day Free Trial →
@@ -262,7 +262,7 @@ function PlansContent({
       {/* Header */}
       <div style={{ textAlign: "center", marginBottom: "28px" }}>
         <div style={{ marginBottom: "14px" }}>
-          <img src="/logo.svg" alt="IndexBeam" style={{ height: "32px", display: "inline-block" }} />
+          <img src="/logo.png" alt="IndexBeam" style={{ height: "32px", display: "inline-block" }} />
         </div>
         <div style={{ fontSize: "15px", color: "#6d7175" }}>
           14 days free — no charge until your trial ends
@@ -289,7 +289,7 @@ function PlansContent({
             height: 24,
             borderRadius: 12,
             cursor: "pointer",
-            background: isYearly ? "#F51015" : "#c9cccf",
+            background: isYearly ? "#4CAF50" : "#c9cccf",
             position: "relative",
             transition: "background 0.2s",
           }}
@@ -311,8 +311,8 @@ function PlansContent({
             Yearly
           </span>
           <div style={{
-            background: "#FDDEDE",
-            color: "#922B21",
+            background: "#E8F5E9",
+            color: "#2E7D32",
             padding: "2px 8px",
             borderRadius: "20px",
             fontSize: "11px",
@@ -408,7 +408,7 @@ function PricingCard({
       width: "260px",
       position: "relative",
       borderRadius: "16px",
-      border: featured ? "2px solid #F51015" : "1.5px solid #e1e3e5",
+      border: featured ? "2px solid #4CAF50" : "1.5px solid #e1e3e5",
       boxShadow: featured
         ? "0px 0px 24px 6px rgba(192, 57, 43, 0.2), 0 4px 12px rgba(0,0,0,0.08)"
         : "0 2px 8px rgba(0,0,0,0.06)",
@@ -419,14 +419,14 @@ function PricingCard({
       {featuredText && (
         <div style={{ position: "absolute", top: "-14px", right: "14px", zIndex: 1 }}>
           <div style={{
-            background: "#FDDEDE",
-            color: "#922B21",
+            background: "#E8F5E9",
+            color: "#2E7D32",
             padding: "4px 14px",
             borderRadius: "20px",
             fontSize: "12px",
             fontWeight: "700",
-            border: "1.5px solid #F51015",
-            boxShadow: "0 2px 4px rgba(192,57,43,0.2)",
+            border: "1.5px solid #4CAF50",
+            boxShadow: "0 2px 4px rgba(76,175,80,0.2)",
           }}>
             {featuredText}
           </div>
@@ -464,13 +464,13 @@ function PricingCard({
                 width: 18,
                 height: 18,
                 borderRadius: "50%",
-                background: "#FDDEDE",
+                background: "#E8F5E9",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 flexShrink: 0,
               }}>
-                <span style={{ color: "#F51015", fontSize: "11px", fontWeight: "bold" }}>✓</span>
+                <span style={{ color: "#4CAF50", fontSize: "11px", fontWeight: "bold" }}>✓</span>
               </div>
               <span style={{ fontSize: "13px", color: "#495057" }}>{feature}</span>
             </div>
@@ -488,12 +488,12 @@ function PricingCard({
                 padding: "12px 20px",
                 borderRadius: "8px",
                 border: "none",
-                background: loading ? "#e0e0e0" : "linear-gradient(135deg, #F51015, #F51015)",
+                background: loading ? "#e0e0e0" : "linear-gradient(135deg, #4CAF50, #4CAF50)",
                 color: "white",
                 fontSize: "14px",
                 fontWeight: "700",
                 cursor: loading ? "default" : "pointer",
-                boxShadow: "0 2px 8px rgba(192,57,43,0.35)",
+                boxShadow: "0 2px 8px rgba(76,175,80,0.35)",
               }}
             >
               {loading ? "Loading…" : "Start 14-Day Trial"}
