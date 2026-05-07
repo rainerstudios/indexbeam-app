@@ -67,7 +67,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { billing, session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent") as string;
 
@@ -78,17 +78,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const { encrypt } = await import("../lib/encryption.server");
 
+  if (intent === "upgrade") {
+    const plan = formData.get("plan") as string;
+    const interval = (formData.get("interval") as string) || "EVERY_30_DAYS";
+    if (plan) {
+      const { createSubscription } = await import("../services/billing.server");
+      const confirmationUrl = await createSubscription(admin, plan, interval as "EVERY_30_DAYS" | "ANNUAL");
+      if (confirmationUrl) return { confirmationUrl };
+    }
+    return null;
+  }
+
   if (intent === "change-plan") {
     const plan = formData.get("plan") as string;
     if (plan && plan !== "free") {
-      await billing.request({ plan });
+      const { createSubscription } = await import("../services/billing.server");
+      const confirmationUrl = await createSubscription(admin, plan);
+      if (confirmationUrl) return { confirmationUrl };
     }
     if (plan === "free") {
-      // Cancel active Shopify subscription before downgrading
+      const { getActiveSubscription, cancelSubscription } = await import("../services/billing.server");
       try {
-        const { hasActivePayment, appSubscriptions } = await billing.check({ plans: [], isTest: process.env.NODE_ENV !== "production" });
-        if (hasActivePayment && appSubscriptions.length > 0) {
-          await billing.cancel({ subscriptionId: appSubscriptions[0].id, isTest: process.env.NODE_ENV !== "production", prorate: true });
+        const subscription = await getActiveSubscription(admin);
+        if (subscription) {
+          await cancelSubscription(admin, subscription.id);
         }
       } catch {
         // Subscription may already be cancelled
@@ -339,6 +352,10 @@ export default function SettingsPage() {
   const [llmsTxtContent, setLlmsTxtContent] = useState(store?.llmsTxtContent || "");
 
   useEffect(() => {
+    if (actionData?.confirmationUrl) {
+      window.top!.location.href = actionData.confirmationUrl;
+      return;
+    }
     if (actionData?.success && actionData.message) {
       (window as any).shopify?.toast?.show?.(actionData.message);
       if (actionData.message.includes("added")) setCompetitorDomain("");
